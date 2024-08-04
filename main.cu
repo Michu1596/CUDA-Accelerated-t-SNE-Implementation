@@ -33,17 +33,17 @@ void init_fake_data(){
     }
   }
 
-  // cluster 2 of 5 points near (10, ..., 10) with std 0.1
+  // cluster 2 of 5 points near (1000, ..., 1000) with std 0.01
   for (int i = N / 3; i < (2 * N) / 3; i++) {
     for (int j = 0; j < DIMENSIONS; j++) {
-      data[i * DIMENSIONS + j] = distribution(generator)/10 + 10;
+      data[i * DIMENSIONS + j] = distribution(generator)/100 + 1000;
     }
   }
 
-  // cluster 3 of 6 points near (20, ..., 20) with std 5
+  // cluster 3 of 6 points near (20000, ..., 20000) with std 500
   for (int i = (2 * N) / 3; i < N; i++) {
     for (int j = 0; j < DIMENSIONS; j++) {
-      data[i * DIMENSIONS + j] = distribution(generator)*5 + 20;
+      data[i * DIMENSIONS + j] = distribution(generator)*500 + 20000;
     }
   }
 }
@@ -87,31 +87,19 @@ int main(int argc, char **argv) {
   double *distances_host = (double *)malloc(N * (N + 1) / 2 * sizeof(double));
   checkCudaErrors(cudaMemcpy(distances_host, distances_device, N * (N + 1) / 2 * sizeof(double),
                              cudaMemcpyDeviceToHost));
-  for (int i = 0; i < N; i++) {
-    for (int j = 0; j < N; j++) {
-      if(i == 50){
-        std::cout<< "distances for i:" << i << " j:" << j << " distance: "  << distances_host[TRIANGLE(i, j)] << std::endl;
-    }
-    }
-  }
+  // for (int i = 0; i < N; i++) {
+  //   for (int j = 0; j < N; j++) {
+  //     if(i == 50){
+  //       std::cout<< "distances for i:" << i << " j:" << j << " distance: "  << distances_host[TRIANGLE(i, j)] << std::endl;
+  //   }
+  //   }
+  // }
 
   // calculating sigmas
   double perplexity = 5;
   double tolerance = 0.1;
-
-  // debug
-  double *shannon_entropies_host = (double *)malloc(1000 * sizeof(double));
-  double *perplexities_host = (double *)malloc(1000 * sizeof(double));
-  double *sigmas_out_host = (double *)malloc(1000 * sizeof(double));
-  double *shannon_entropies;
-  double *perplexities;
-  double *sigmas_out;
-  checkCudaErrors(cudaMalloc(&shannon_entropies, 1000 * sizeof(double)));
-  checkCudaErrors(cudaMalloc(&perplexities, 1000 * sizeof(double)));
-  checkCudaErrors(cudaMalloc(&sigmas_out, 1000 * sizeof(double)));
-  //debug
   sdkStartTimer(&timer);
-  calculate_sigmas<<<N, THREADS>>>(distances_device, sigmas_device, perplexity, tolerance, N, shannon_entropies, perplexities, sigmas_out);
+  calculate_sigmas<<<N, THREADS>>>(distances_device, sigmas_device, perplexity, tolerance, N);
   checkCudaErrors(cudaDeviceSynchronize());
 
   sdkStopTimer(&timer);
@@ -122,16 +110,6 @@ int main(int argc, char **argv) {
   for (int i = 0; i < N; i++) {
     std::cout << "i: " << i << " sigma: " << sigmas_host[i] << std::endl;
   }
-
-  checkCudaErrors(cudaMemcpy(shannon_entropies_host, shannon_entropies, 1000 * sizeof(double),
-                             cudaMemcpyDeviceToHost));
-  checkCudaErrors(cudaMemcpy(perplexities_host, perplexities, 1000 * sizeof(double),
-                              cudaMemcpyDeviceToHost));
-  checkCudaErrors(cudaMemcpy(sigmas_out_host, sigmas_out, 1000 * sizeof(double),
-                              cudaMemcpyDeviceToHost)); 
-  // for(int i = 0; i < 10; i++){
-  //   std::cout << "shannon_entropies: " << shannon_entropies_host[i] << " perplexities: " << perplexities_host[i] << " sigmas_out: " << sigmas_out_host[i] << std::endl;
-  // }
   
   sdkDeleteTimer(&timer);
 

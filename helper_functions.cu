@@ -60,7 +60,7 @@ __global__ void calculate_distances(double *d_data,double* distances, int n) {
 }
 
 // each block is responsible for a single value of sigma for p_{j|blockId} for all j
-__global__ void calculate_sigmas(double *distances_sq, double *sigmas, double perp, double tolerance, int n, double *shannon_entropies, double *perplexities, double *sigmas_out) 
+__global__ void calculate_sigmas(double *distances_sq, double *sigmas, double perp, double tolerance, int n) 
 {
   int blockId = blockIdx.x;
   int stride = blockDim.x;
@@ -68,7 +68,6 @@ __global__ void calculate_sigmas(double *distances_sq, double *sigmas, double pe
   __shared__ double shared_denominator[THREADS];
   __shared__ double sum_of_numerators_logs[THREADS];
   __shared__ bool done;
-  int max_iter = 10;
 
   //only for the first thread in the block
   if(threadIdx.x == 0){
@@ -90,16 +89,10 @@ __global__ void calculate_sigmas(double *distances_sq, double *sigmas, double pe
     double temp = 0;
     double temp_exp = 0;
     while(i < n){
-      if(blockIdx.x == 50){
-        printf("thread: %d in while\n",threadIdx.x);
-      }
       if(i != blockId){
         int index = TRIANGLE(blockId, i);
         temp = -(distances_sq[index] / (2 * sigma * sigma));
         temp_exp = exp(temp);
-        if(blockIdx.x == 50){
-          printf("thread: %d \n index: %d\n distances_sq[index]: %f\n temp: %f\n temp_exp: %f\n",threadIdx.x, index, distances_sq[index], temp, temp_exp);
-        }
         // compiler would probably optimize this to a single exp call 
         my_denominator += temp_exp;
         my_sum_of_numerators_logs += temp_exp * temp; 
@@ -107,21 +100,8 @@ __global__ void calculate_sigmas(double *distances_sq, double *sigmas, double pe
       i += stride;
     }
 
-    if(blockIdx.x == 50){
-      printf("threadId: %d\n my_denominator: %f\n my_sum_of_numerators_logs: %f\n", threadIdx.x, my_denominator, my_sum_of_numerators_logs);
-    }
     shared_denominator[threadIdx.x] = my_denominator;
     sum_of_numerators_logs[threadIdx.x] = my_sum_of_numerators_logs;
-
-    if(std::isnan(shared_denominator[threadIdx.x])){
-      printf("Before reduction\n");
-      printf("BlockId: %d, threadId: %d\n", blockId, threadIdx.x);
-      printf("shared_denominator[%d]: %f\n", threadIdx.x, shared_denominator[threadIdx.x]);
-      printf("sum_of_numerators_logs[%d]: %f\n", threadIdx.x, sum_of_numerators_logs[threadIdx.x]);
-      printf("temp: %f\n", temp);
-      printf("temp_exp: %f\n", temp_exp);
-      printf("index: %d\n", TRIANGLE(blockId, i));
-    }
 
     int limit = THREADS / 2;
     __syncthreads();
@@ -129,22 +109,12 @@ __global__ void calculate_sigmas(double *distances_sq, double *sigmas, double pe
     while ( limit > 0)
     {
       if(threadIdx.x < limit){
-        if(threadIdx.x == 0 && blockIdx.x == 50){
-          for(int i = 0; i < limit * 2; i++){
-            printf("shared_denominator[%d]: %f\n", i, shared_denominator[i]);
-          }
-          printf("\n");
-        }
         shared_denominator[threadIdx.x] += shared_denominator[threadIdx.x + limit];
         sum_of_numerators_logs[threadIdx.x] += sum_of_numerators_logs[threadIdx.x + limit];
         // assert(shared_denominator[threadIdx.x] >= 0);
       }
       limit /= 2;
       __syncthreads();
-    }
-
-    if(threadIdx.x == 0 and false){
-      printf("After reduction\n BlockId: %d\n shared_denominator[0]: %f\n", blockId, shared_denominator[0]);
     }
 
     __syncthreads();
@@ -162,15 +132,7 @@ __global__ void calculate_sigmas(double *distances_sq, double *sigmas, double pe
       double diff = perplexity - perp;
       double diff_abs = diff > 0 ? diff : -diff;
 
-      // DEBUG
-      if(blockId == 50){
-        printf("BlockId: %d\n sigma: %e\n perplexity: %f\n shannon_entropy: %f\n sum_of_numerators_logs[0]: %f\n shared_denominator[0]: %f\n", 
-                blockId, sigma, perplexity, shannon_entropy, sum_of_numerators_logs[0], shared_denominator[0]);
-      }
-
-      if(diff_abs < tolerance 
-        // || max_iter-- == 0
-        ){
+      if(diff_abs < tolerance ){
         sigmas[blockId] = sigma;
         done = true; // this will break the while loop
       } else {
@@ -195,7 +157,6 @@ __global__ void calculate_sigmas(double *distances_sq, double *sigmas, double pe
       }
       
     }
-    // __syncthreads();
 
   }
 }
