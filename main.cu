@@ -77,31 +77,41 @@ int main(int argc, char **argv) {
   sdkCreateTimer(&timer);
   sdkStartTimer(&timer);
 
-  calculate_distances<<<N / 2, THREADS>>>(dData, distances_device, N);  
+  calculate_distances<<<(N + 1) / 2, THREADS>>>(dData, distances_device, N);  
   checkCudaErrors(cudaDeviceSynchronize());
 
   sdkStopTimer(&timer);
   std::cout << "Kernel time: " << sdkGetTimerValue(&timer) << std::endl;
+
+  // debug Distance
   double *distances_host = (double *)malloc(N * (N + 1) / 2 * sizeof(double));
   checkCudaErrors(cudaMemcpy(distances_host, distances_device, N * (N + 1) / 2 * sizeof(double),
                              cudaMemcpyDeviceToHost));
   for (int i = 0; i < N; i++) {
     for (int j = 0; j < N; j++) {
+      if(i == 50){
         std::cout<< "distances for i:" << i << " j:" << j << " distance: "  << distances_host[TRIANGLE(i, j)] << std::endl;
-
     }
-    std::cout << std::endl;
+    }
   }
 
-  std::cout << "distances_host linear" << std::endl;
-  for (int i = 0; i < N * (N + 1) / 2; i++) {
-    std::cout << "i: " << i << "distance: " << distances_host[i] << std::endl;
-  }
-
-  double perplexity = 10;
+  // calculating sigmas
+  double perplexity = 5;
   double tolerance = 0.1;
+
+  // debug
+  double *shannon_entropies_host = (double *)malloc(1000 * sizeof(double));
+  double *perplexities_host = (double *)malloc(1000 * sizeof(double));
+  double *sigmas_out_host = (double *)malloc(1000 * sizeof(double));
+  double *shannon_entropies;
+  double *perplexities;
+  double *sigmas_out;
+  checkCudaErrors(cudaMalloc(&shannon_entropies, 1000 * sizeof(double)));
+  checkCudaErrors(cudaMalloc(&perplexities, 1000 * sizeof(double)));
+  checkCudaErrors(cudaMalloc(&sigmas_out, 1000 * sizeof(double)));
+  //debug
   sdkStartTimer(&timer);
-  calculate_sigmas<<<N, THREADS>>>(distances_device, sigmas_device, perplexity, tolerance, N);
+  calculate_sigmas<<<N, THREADS>>>(distances_device, sigmas_device, perplexity, tolerance, N, shannon_entropies, perplexities, sigmas_out);
   checkCudaErrors(cudaDeviceSynchronize());
 
   sdkStopTimer(&timer);
@@ -110,8 +120,18 @@ int main(int argc, char **argv) {
   checkCudaErrors(cudaMemcpy(sigmas_host, sigmas_device, N * sizeof(double),
                              cudaMemcpyDeviceToHost));
   for (int i = 0; i < N; i++) {
-    std::cout << sigmas_host[i] << std::endl;
+    std::cout << "i: " << i << " sigma: " << sigmas_host[i] << std::endl;
   }
+
+  checkCudaErrors(cudaMemcpy(shannon_entropies_host, shannon_entropies, 1000 * sizeof(double),
+                             cudaMemcpyDeviceToHost));
+  checkCudaErrors(cudaMemcpy(perplexities_host, perplexities, 1000 * sizeof(double),
+                              cudaMemcpyDeviceToHost));
+  checkCudaErrors(cudaMemcpy(sigmas_out_host, sigmas_out, 1000 * sizeof(double),
+                              cudaMemcpyDeviceToHost)); 
+  // for(int i = 0; i < 10; i++){
+  //   std::cout << "shannon_entropies: " << shannon_entropies_host[i] << " perplexities: " << perplexities_host[i] << " sigmas_out: " << sigmas_out_host[i] << std::endl;
+  // }
   
   sdkDeleteTimer(&timer);
 
@@ -119,7 +139,7 @@ int main(int argc, char **argv) {
   checkCudaErrors(cudaFree(dData));
   checkCudaErrors(cudaFree(distances_device));
   checkCudaErrors(cudaFree(sigmas_device));
-  free(distances_host);
+  // free(distances_host);
   free(sigmas_host);
   
   // finish
