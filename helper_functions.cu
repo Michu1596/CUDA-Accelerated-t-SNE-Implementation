@@ -60,7 +60,7 @@ __global__ void calculate_distances(double *d_data,double* distances, int n) {
 }
 
 // each block is responsible for a single value of sigma for p_{j|blockId} for all j
-__global__ void calculate_sigmas(double *distances_sq, double *sigmas, double perp, double tolerance, int n) 
+__global__ void calculate_sigmas(double *distances_sq, double *sigmas, double perp, double tolerance, double* dominators, int n) 
 {
   int blockId = blockIdx.x;
   int stride = blockDim.x;
@@ -134,6 +134,7 @@ __global__ void calculate_sigmas(double *distances_sq, double *sigmas, double pe
 
       if(diff_abs < tolerance ){
         sigmas[blockId] = sigma;
+        dominators[blockId] = shared_denominator[0];
         done = true; // this will break the while loop
       } else {
         if(lower_bound_found && upper_bound_found){
@@ -158,5 +159,51 @@ __global__ void calculate_sigmas(double *distances_sq, double *sigmas, double pe
       
     }
 
+  }
+}
+
+__global__ void calculate_p_asym(double *distances, double *sigmas, double *denominators, double *p_asym, int n){
+  int i = blockIdx.x;
+  int stride = blockDim.x;
+
+  double denominator = denominators[i];
+  double sigma = sigmas[i];
+  int j = threadIdx.x;
+
+
+  while (j < n){
+    if(i != j){
+      int triangle_index = TRIANGLE(i, j);
+      p_asym[i * n + j] = exp(-distances[triangle_index] / (2 * sigma * sigma)) / denominator;
+    }
+    j += stride;
+  }
+  
+}
+
+__global__ void calculate_p_sym(double *p_asym, double *p_sym, int n){
+  // int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  int stride = blockDim.x;
+  // calculate distance to each data point with lower index
+
+  int triangle_index = 0;
+
+  // column myPoint
+  int i = blockIdx.x;
+  int j = i - 1 - threadIdx.x; // this version with divergent memory access is 3 x faster (wow)
+  while(j >= 0 && i < n){
+    triangle_index = TRIANGLE(i, j);
+    p_sym[triangle_index] = (p_asym[i * n + j] + p_asym[j * n + i]) / (2 * n);
+    j -= stride;
+  }
+
+  // column N - myPoint
+  i = n - i - 1;
+  j = i - 1 - threadIdx.x;
+  // yes this is the same code as above but I don't want to make a function for this
+  while(j >= 0 && i < n){
+    triangle_index = TRIANGLE(i, j);
+    p_sym[triangle_index] = (p_asym[i * n + j] + p_asym[j * n + i]) / (2 * n);
+    j -= stride;
   }
 }

@@ -55,10 +55,30 @@ int main(int argc, char **argv) {
   double *distances_device;
   double *sigmas_device;
   double *sigmas_host;
+  double *denominators_device; // for calculating pji - we can calculate it in the same kernel as sigmas
+  double *p_asym_device; // p_i|j
+  double *p_sym_device;  // p_ij
+  double *p_asym_host;
+  double *p_sym_host;
   checkCudaErrors(cudaMalloc(&dData, N * DIMENSIONS * sizeof(double)));
+
   checkCudaErrors(cudaMalloc(&distances_device, N * (N + 1) / 2 * sizeof(double)));
   checkCudaErrors(cudaMemset(distances_device, -1, N * (N + 1) / 2 * sizeof(double)));
+
+  checkCudaErrors(cudaMalloc(&denominators_device, N * sizeof(double)));
+  checkCudaErrors(cudaMemset(denominators_device, -1, N * sizeof(double)));
+
   checkCudaErrors(cudaMalloc(&sigmas_device, N * sizeof(double)));
+  checkCudaErrors(cudaMemset(sigmas_device, -1, N * sizeof(double)));
+
+  checkCudaErrors(cudaMalloc(&p_asym_device, N * N * sizeof(double)));
+  checkCudaErrors(cudaMemset(p_asym_device, 0, N * N * sizeof(double)));
+
+  checkCudaErrors(cudaMalloc(&p_sym_device, N * (N + 1) / 2 * sizeof(double)));
+  checkCudaErrors(cudaMemset(p_sym_device, 0, N * (N + 1) / 2 * sizeof(double)));
+
+  p_sym_host = (double *)malloc(N * (N + 1) / 2 * sizeof(double));
+  p_asym_host = (double *)malloc(N * N * sizeof(double));
   sigmas_host = (double *)malloc(N * sizeof(double));
   // ^ triangle matrix of distances between points
   // 
@@ -98,26 +118,68 @@ int main(int argc, char **argv) {
   // calculating sigmas
   double perplexity = 5;
   double tolerance = 0.1;
+  sdkCreateTimer(&timer);
   sdkStartTimer(&timer);
-  calculate_sigmas<<<N, THREADS>>>(distances_device, sigmas_device, perplexity, tolerance, N);
+  calculate_sigmas<<<N, THREADS>>>(distances_device, sigmas_device, perplexity, tolerance, denominators_device, N);
   checkCudaErrors(cudaDeviceSynchronize());
-
   sdkStopTimer(&timer);
   std::cout << "Kernel sigma time: " << sdkGetTimerValue(&timer) << std::endl;
 
+
   checkCudaErrors(cudaMemcpy(sigmas_host, sigmas_device, N * sizeof(double),
                              cudaMemcpyDeviceToHost));
-  for (int i = 0; i < N; i++) {
-    std::cout << "i: " << i << " sigma: " << sigmas_host[i] << std::endl;
+  // for (int i = 0; i < N; i++) {
+  //   std::cout << "i: " << i << " sigma: " << sigmas_host[i] << std::endl;
+  // }
+
+  // calculating p_asym
+  sdkCreateTimer(&timer);
+  sdkStartTimer(&timer);
+  calculate_p_asym<<<N, THREADS>>>(distances_device, sigmas_device, denominators_device, p_asym_device, N);
+  checkCudaErrors(cudaDeviceSynchronize());
+  sdkStopTimer(&timer);
+  std::cout << "Kernel p_asym time: " << sdkGetTimerValue(&timer) << std::endl;
+
+  checkCudaErrors(cudaMemcpy(p_asym_host, p_asym_device, N * N * sizeof(double),
+                             cudaMemcpyDeviceToHost));
+
+  // now we can free distances_device and denominators_device
+  checkCudaErrors(cudaFree(distances_device));
+  checkCudaErrors(cudaFree(denominators_device));
+
+
+  // calculating p_sym
+  sdkCreateTimer(&timer);
+  sdkStartTimer(&timer);
+  calculate_p_sym<<<(N + 1) / 2, THREADS>>>(p_asym_device, p_sym_device, N);
+  checkCudaErrors(cudaDeviceSynchronize());
+  sdkStopTimer(&timer);
+  std::cout << "Kernel p_sym time: " << sdkGetTimerValue(&timer) << std::endl;
+  checkCudaErrors(cudaMemcpy(p_sym_host, p_sym_device, N * (N + 1) / 2 * sizeof(double),
+                             cudaMemcpyDeviceToHost)); // 
+  // p_sym_host should sum up to 0.5 because it's triangle matrix
+  double sum = 0;
+
+  sum = 0;
+  for(int i = 0; i < N; i++)
+  {
+    for(int j = 0; j < i; j++)
+    {
+      sum += p_sym_host[TRIANGLE(i, j)];
+    }
   }
-  
+  std::cout << "sum: " << sum << std::endl;
+
   sdkDeleteTimer(&timer);
 
 
   checkCudaErrors(cudaFree(dData));
-  checkCudaErrors(cudaFree(distances_device));
+  // checkCudaErrors(cudaFree(distances_device));
   checkCudaErrors(cudaFree(sigmas_device));
-  // free(distances_host);
+  checkCudaErrors(cudaFree(p_asym_device));
+  checkCudaErrors(cudaFree(p_sym_device));
+  free(p_sym_host);
+  free(p_asym_host);
   free(sigmas_host);
   
   // finish
