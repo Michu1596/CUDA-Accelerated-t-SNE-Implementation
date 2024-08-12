@@ -32,7 +32,7 @@ __device__ double l2_dist_sq(double *a, double *b, int n) {
 
 
 // each block is responsible a column x and N - x so each block calculates N + 1 distances
-__global__ void calculate_distances(double *d_data,double* distances, int n) {
+__global__ void calculate_distances(double *d_data,double* distances, int dim, int n) {
   // int idx = blockIdx.x * blockDim.x + threadIdx.x;
   int stride = blockDim.x;
   // calculate distance to each data point with lower index
@@ -44,7 +44,7 @@ __global__ void calculate_distances(double *d_data,double* distances, int n) {
   int otherPoint = myPoint - 1 - threadIdx.x; // this version with divergent memory access is 3 x faster (wow)
   while(otherPoint >= 0 && myPoint < n){
     triangle_index = TRIANGLE(myPoint, otherPoint);
-    distances[triangle_index] = l2_dist_sq(d_data + myPoint * DIMENSIONS, d_data + otherPoint * DIMENSIONS, DIMENSIONS);
+    distances[triangle_index] = l2_dist_sq(d_data + myPoint * dim, d_data + otherPoint * dim, dim);
     otherPoint -= stride;
   }
 
@@ -53,7 +53,7 @@ __global__ void calculate_distances(double *d_data,double* distances, int n) {
   otherPoint = myPoint - 1 - threadIdx.x;
   while(otherPoint >= 0 && myPoint < n){
     triangle_index = TRIANGLE(myPoint, otherPoint);
-    distances[triangle_index] = l2_dist_sq(d_data + myPoint * DIMENSIONS, d_data + otherPoint * DIMENSIONS, DIMENSIONS);
+    distances[triangle_index] = l2_dist_sq(d_data + myPoint * dim, d_data + otherPoint * dim, dim);
     otherPoint -= stride;
   }
 
@@ -206,4 +206,109 @@ __global__ void calculate_p_sym(double *p_asym, double *p_sym, int n){
     p_sym[triangle_index] = (p_asym[i * n + j] + p_asym[j * n + i]) / (2 * n);
     j -= stride;
   }
+}
+
+__global__ void process_distances(double *distances, double*denominator_for_block, int n){
+  // int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  int stride = blockDim.x;
+  // calculate distance to each data point with lower index
+
+  int triangle_index = 0;
+  __shared__ double shared_denominator[THREADS];
+
+  shared_denominator[threadIdx.x] = 0;
+  // column myPoint
+  int i = blockIdx.x;
+  int j = i - 1 - threadIdx.x; // this version with divergent memory access is 3 x faster (wow)
+  while(j >= 0 && i < n){
+    triangle_index = TRIANGLE(i, j);
+    
+    distances[triangle_index] = 1 / (1 + distances[triangle_index]);
+    shared_denominator[threadIdx.x] += distances[triangle_index];
+
+    j -= stride;
+  }
+
+  // column N - myPoint
+  i = n - i - 1;
+  j = i - 1 - threadIdx.x;
+  // yes this is the same code as above but I don't want to make a function for this
+  
+  while(j >= 0 && i < n){
+    triangle_index = TRIANGLE(i, j);
+    
+    distances[triangle_index] = 1 / (1 + distances[triangle_index]);
+    shared_denominator[threadIdx.x] += distances[triangle_index];
+    
+    j -= stride;
+  }
+  
+
+  int limit = THREADS / 2;
+   __syncthreads();
+
+    while ( limit > 0)
+    {
+      if(threadIdx.x < limit){
+        shared_denominator[threadIdx.x] += shared_denominator[threadIdx.x + limit];
+      }
+      limit /= 2;
+      __syncthreads();
+    }
+
+    __syncthreads();
+  
+  if(threadIdx.x == 0){
+    denominator_for_block[blockIdx.x] = shared_denominator[0];
+  }
+
+}
+
+__global__ void calculate_gradient(double *p, double *processed_distances, double *y, double denominator, double *grad, int n){
+  int i = blockIdx.x;
+  int stride = blockDim.x;
+
+  __shared__ double shared_grad[THREADS * DIMENSIONS_LOWER];
+
+  for(int i = 0; i < DIMENSIONS_LOWER; i++){
+    shared_grad[threadIdx.x * DIMENSIONS_LOWER + i] = 0;
+  }
+
+  int j = threadIdx.x;
+  
+  while(j < n){
+    if(i != j){
+      int triangle_index = TRIANGLE(i, j);
+      double q = processed_distances[triangle_index] / denominator;
+
+      for(int k = 0; k < DIMENSIONS_LOWER; k++){
+        shared_grad[threadIdx.x * DIMENSIONS_LOWER + k] += 4 * (p[triangle_index] - q) 
+                * (y[i * DIMENSIONS_LOWER + k] - y[j * DIMENSIONS_LOWER + k]) *  processed_distances[triangle_index];
+      }
+    }
+    j += stride;
+  }
+
+  int limit = THREADS / 2;
+   __syncthreads();
+
+    while ( limit > 0)
+    {
+      if(threadIdx.x < limit){
+        for(int i = 0; i < DIMENSIONS_LOWER; i++){
+           shared_grad[threadIdx.x * DIMENSIONS_LOWER + i] += shared_grad[(threadIdx.x + limit) * DIMENSIONS_LOWER + i];
+        }
+      }
+      limit /= 2;
+      __syncthreads();
+    }
+
+    __syncthreads();
+
+    if(threadIdx.x == 0){
+      for(int i = 0; i < DIMENSIONS_LOWER; i++){
+        grad[blockIdx.x * DIMENSIONS_LOWER + i] = shared_grad[i];
+      }
+    }
+
 }

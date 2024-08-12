@@ -49,12 +49,24 @@ void init_fake_data(){
 }
 
 void sample_initial_solution(double *solution) {
-  std::normal_distribution<float> distribution(0.0, 0.0001);
+  std::normal_distribution<float> distribution(0.0, 1.0);
   std::default_random_engine generator;
 
   for(int i = 0; i < N * DIMENSIONS_LOWER; i++) {
-    solution[i] = distribution(generator);
+    solution[i] = distribution(generator) / 10000;
   }
+}
+
+double sum_arr_from_device(double* device_arr, int size) {
+  double* host_arr = (double *)malloc(size * sizeof(double));
+  checkCudaErrors(cudaMemcpy(host_arr, device_arr, size * sizeof(double),
+                             cudaMemcpyDeviceToHost));
+  double sum = 0;
+  for(int i = 0; i < size; i++) {
+    sum += host_arr[i];
+  }
+  free(host_arr);
+  return sum;
 }
 
 int main(int argc, char **argv) {
@@ -97,10 +109,12 @@ int main(int argc, char **argv) {
   // 1 1 2
   // 2 3 4 5
   // 3 6 7 8 9
+  // 4 10 11 12 13 14
   
 
   // init data and copy to device
   init_fake_data();
+  sample_initial_solution(solution);
   checkCudaErrors(cudaMemcpy(dData, data, N * DIMENSIONS * sizeof(double),
                              cudaMemcpyHostToDevice));
                             
@@ -110,7 +124,7 @@ int main(int argc, char **argv) {
 
   // calculate distances
   sdkStartTimer(&timer);
-  calculate_distances<<<(N + 1) / 2, THREADS>>>(dData, distances_device, N);  
+  calculate_distances<<<(N + 1) / 2, THREADS>>>(dData, distances_device, DIMENSIONS, N);  
   checkCudaErrors(cudaDeviceSynchronize());
   sdkStopTimer(&timer);
   std::cout << "Kernel time: " << sdkGetTimerValue(&timer) << std::endl;
@@ -155,8 +169,50 @@ int main(int argc, char **argv) {
 
 
   // grtadient descent
+  // double* d_low_dimensional_affinities;
+  double* d_processed_distances;
+  double* d_solution;
+  double* d_solution_next;
+  double* d_denominator_for_block;
+  double* d_grad;
+  // checkCudaErrors(cudaMalloc(&d_low_dimensional_affinities, N * (N + 1) / 2 * DIMENSIONS_LOWER * sizeof(double)));
+  checkCudaErrors(cudaMalloc(&d_processed_distances, N * (N + 1) / 2 * sizeof(double)));
+  checkCudaErrors(cudaMalloc(&d_solution, N * DIMENSIONS_LOWER * sizeof(double)));
+  checkCudaErrors(cudaMalloc(&d_solution_next, N * DIMENSIONS_LOWER * sizeof(double)));
+  checkCudaErrors(cudaMalloc(&d_denominator_for_block, ((N + 1) / 2) * sizeof(double)));
+  checkCudaErrors(cudaMalloc(&d_grad, N * DIMENSIONS_LOWER * sizeof(double)));
+
+  checkCudaErrors(cudaMemset(d_processed_distances, -1, N * (N + 1) / 2 * sizeof(double)));
+  checkCudaErrors(cudaMemset(d_solution, 3, N * DIMENSIONS_LOWER * sizeof(double)));
+
+  checkCudaErrors(cudaMemcpy(d_solution, solution, N * DIMENSIONS_LOWER * sizeof(double),
+                             cudaMemcpyHostToDevice));
+// print solution
+  for(int i = 0; i < N ; i++) {
+    for(int j = 0; j < DIMENSIONS_LOWER; j++) {
+      std::cout << "solution[" << i << "][" << j << "] = " << solution[i * DIMENSIONS_LOWER + j] << std::endl;
+    }
+  }
   for(int i = 0; i < 1; i++) {
-    
+    calculate_distances<<<(N + 1) / 2, THREADS>>>(d_solution, d_processed_distances, DIMENSIONS_LOWER, N);
+    checkCudaErrors(cudaDeviceSynchronize());
+
+    process_distances<<<(N + 1) / 2, THREADS>>>(d_processed_distances, d_denominator_for_block, N);
+    checkCudaErrors(cudaDeviceSynchronize());
+
+    double denominator = sum_arr_from_device(d_denominator_for_block, (N + 1) / 2);
+
+    calculate_gradient<<<N, THREADS>>>(p_sym_device, d_processed_distances, d_solution, denominator, d_grad, N);
+  }
+
+  // print gradient
+  double* grad = (double *)malloc(N * DIMENSIONS_LOWER * sizeof(double));
+  checkCudaErrors(cudaMemcpy(grad, d_grad, N * DIMENSIONS_LOWER * sizeof(double),
+                             cudaMemcpyDeviceToHost));
+  for(int i = 0; i < N ; i++) {
+    for(int j = 0; j < DIMENSIONS_LOWER; j++) {
+      std::cout << "grad[" << i << "][" << j << "] = " << grad[i * DIMENSIONS_LOWER + j] << std::endl;
+    }
   }
 
   // free memory
