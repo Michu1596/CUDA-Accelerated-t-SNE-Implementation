@@ -48,9 +48,16 @@ void init_fake_data(){
   }
 }
 
-int main(int argc, char **argv) {
+void sample_initial_solution(double *solution) {
+  std::normal_distribution<float> distribution(0.0, 0.0001);
+  std::default_random_engine generator;
 
-  // call kernel
+  for(int i = 0; i < N * DIMENSIONS_LOWER; i++) {
+    solution[i] = distribution(generator);
+  }
+}
+
+int main(int argc, char **argv) {
   double *dData;
   double *distances_device;
   double *sigmas_device;
@@ -60,6 +67,8 @@ int main(int argc, char **argv) {
   double *p_sym_device;  // p_ij
   double *p_asym_host;
   double *p_sym_host;
+
+  double* solution;
   checkCudaErrors(cudaMalloc(&dData, N * DIMENSIONS * sizeof(double)));
 
   checkCudaErrors(cudaMalloc(&distances_device, N * (N + 1) / 2 * sizeof(double)));
@@ -77,6 +86,7 @@ int main(int argc, char **argv) {
   checkCudaErrors(cudaMalloc(&p_sym_device, N * (N + 1) / 2 * sizeof(double)));
   checkCudaErrors(cudaMemset(p_sym_device, 0, N * (N + 1) / 2 * sizeof(double)));
 
+  solution = (double *)malloc(N * DIMENSIONS_LOWER * sizeof(double));
   p_sym_host = (double *)malloc(N * (N + 1) / 2 * sizeof(double));
   p_asym_host = (double *)malloc(N * N * sizeof(double));
   sigmas_host = (double *)malloc(N * sizeof(double));
@@ -88,18 +98,20 @@ int main(int argc, char **argv) {
   // 2 3 4 5
   // 3 6 7 8 9
   
+
+  // init data and copy to device
   init_fake_data();
   checkCudaErrors(cudaMemcpy(dData, data, N * DIMENSIONS * sizeof(double),
                              cudaMemcpyHostToDevice));
                             
-  // measure kernel time
+  // make timer
   StopWatchInterface *timer = NULL;
   sdkCreateTimer(&timer);
-  sdkStartTimer(&timer);
 
+  // calculate distances
+  sdkStartTimer(&timer);
   calculate_distances<<<(N + 1) / 2, THREADS>>>(dData, distances_device, N);  
   checkCudaErrors(cudaDeviceSynchronize());
-
   sdkStopTimer(&timer);
   std::cout << "Kernel time: " << sdkGetTimerValue(&timer) << std::endl;
 
@@ -107,13 +119,6 @@ int main(int argc, char **argv) {
   double *distances_host = (double *)malloc(N * (N + 1) / 2 * sizeof(double));
   checkCudaErrors(cudaMemcpy(distances_host, distances_device, N * (N + 1) / 2 * sizeof(double),
                              cudaMemcpyDeviceToHost));
-  // for (int i = 0; i < N; i++) {
-  //   for (int j = 0; j < N; j++) {
-  //     if(i == 50){
-  //       std::cout<< "distances for i:" << i << " j:" << j << " distance: "  << distances_host[TRIANGLE(i, j)] << std::endl;
-  //   }
-  //   }
-  // }
 
   // calculating sigmas
   double perplexity = 5;
@@ -125,13 +130,6 @@ int main(int argc, char **argv) {
   sdkStopTimer(&timer);
   std::cout << "Kernel sigma time: " << sdkGetTimerValue(&timer) << std::endl;
 
-
-  checkCudaErrors(cudaMemcpy(sigmas_host, sigmas_device, N * sizeof(double),
-                             cudaMemcpyDeviceToHost));
-  // for (int i = 0; i < N; i++) {
-  //   std::cout << "i: " << i << " sigma: " << sigmas_host[i] << std::endl;
-  // }
-
   // calculating p_asym
   sdkCreateTimer(&timer);
   sdkStartTimer(&timer);
@@ -139,9 +137,6 @@ int main(int argc, char **argv) {
   checkCudaErrors(cudaDeviceSynchronize());
   sdkStopTimer(&timer);
   std::cout << "Kernel p_asym time: " << sdkGetTimerValue(&timer) << std::endl;
-
-  checkCudaErrors(cudaMemcpy(p_asym_host, p_asym_device, N * N * sizeof(double),
-                             cudaMemcpyDeviceToHost));
 
   // now we can free distances_device and denominators_device
   checkCudaErrors(cudaFree(distances_device));
@@ -157,22 +152,14 @@ int main(int argc, char **argv) {
   std::cout << "Kernel p_sym time: " << sdkGetTimerValue(&timer) << std::endl;
   checkCudaErrors(cudaMemcpy(p_sym_host, p_sym_device, N * (N + 1) / 2 * sizeof(double),
                              cudaMemcpyDeviceToHost)); // 
-  // p_sym_host should sum up to 0.5 because it's triangle matrix
-  double sum = 0;
 
-  sum = 0;
-  for(int i = 0; i < N; i++)
-  {
-    for(int j = 0; j < i; j++)
-    {
-      sum += p_sym_host[TRIANGLE(i, j)];
-    }
+
+  // grtadient descent
+  for(int i = 0; i < 1; i++) {
+    
   }
-  std::cout << "sum: " << sum << std::endl;
 
-  sdkDeleteTimer(&timer);
-
-
+  // free memory
   checkCudaErrors(cudaFree(dData));
   // checkCudaErrors(cudaFree(distances_device));
   checkCudaErrors(cudaFree(sigmas_device));
@@ -181,7 +168,9 @@ int main(int argc, char **argv) {
   free(p_sym_host);
   free(p_asym_host);
   free(sigmas_host);
+  free(solution);
   
+  sdkDeleteTimer(&timer);
   // finish
   exit(0);
 }

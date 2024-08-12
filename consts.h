@@ -1,3 +1,4 @@
 #define DIMENSIONS 30
 #define N 16000
 #define THREADS 256
+#define DIMENSIONS_LOWER 2
