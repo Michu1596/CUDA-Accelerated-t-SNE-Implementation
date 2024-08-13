@@ -1,4 +1,5 @@
 #define DIMENSIONS 30
-#define N 16
+#define N 160
 #define THREADS 256
 #define DIMENSIONS_LOWER 2
+#define MAX_LEARNING_RATE 10000

@@ -69,6 +69,16 @@ double sum_arr_from_device(double* device_arr, int size) {
   return sum;
 }
 
+void set_lerning_rates_device(double* d_lerning_rates, double initial_rate, int size) {
+  double* host_lerning_rates = (double *)malloc(size * sizeof(double));
+  for(int i = 0; i < size; i++) {
+    host_lerning_rates[i] = initial_rate;
+  }
+  checkCudaErrors(cudaMemcpy(d_lerning_rates, host_lerning_rates, size * sizeof(double),
+                             cudaMemcpyHostToDevice));
+  free(host_lerning_rates);
+}
+
 int main(int argc, char **argv) {
   double *dData;
   double *distances_device;
@@ -169,52 +179,99 @@ int main(int argc, char **argv) {
 
 
   // grtadient descent
-  // double* d_low_dimensional_affinities;
-  double* d_processed_distances;
-  double* d_solution;
-  double* d_solution_next;
-  double* d_denominator_for_block;
-  double* d_grad;
-  // checkCudaErrors(cudaMalloc(&d_low_dimensional_affinities, N * (N + 1) / 2 * DIMENSIONS_LOWER * sizeof(double)));
+  double* d_processed_distances;   // divided by q denoinator gives q (low dim affinites)
+  double* d_solution;              // low dim solution
+  double* d_solution_old;          // this will become handy for momentum
+  double* d_denominator_for_block; // for calculating q
+  double* d_grad;                  // gradient
+  double* d_lerning_rates;         // learning rates for each parameter
+  double* d_delta_bar;             // exponential average of partial derivatives
+  double* d_kullback_leibler;      // for calculating kullback leibler divergence - just for curiosity
   checkCudaErrors(cudaMalloc(&d_processed_distances, N * (N + 1) / 2 * sizeof(double)));
   checkCudaErrors(cudaMalloc(&d_solution, N * DIMENSIONS_LOWER * sizeof(double)));
-  checkCudaErrors(cudaMalloc(&d_solution_next, N * DIMENSIONS_LOWER * sizeof(double)));
+  checkCudaErrors(cudaMalloc(&d_solution_old, N * DIMENSIONS_LOWER * sizeof(double)));
   checkCudaErrors(cudaMalloc(&d_denominator_for_block, ((N + 1) / 2) * sizeof(double)));
   checkCudaErrors(cudaMalloc(&d_grad, N * DIMENSIONS_LOWER * sizeof(double)));
+  checkCudaErrors(cudaMalloc(&d_lerning_rates, N * DIMENSIONS_LOWER * sizeof(double)));
+  checkCudaErrors(cudaMalloc(&d_delta_bar, N * DIMENSIONS_LOWER * sizeof(double)));
+  checkCudaErrors(cudaMalloc(&d_kullback_leibler, (N + 1) / 2 * sizeof(double)));
 
-  checkCudaErrors(cudaMemset(d_processed_distances, -1, N * (N + 1) / 2 * sizeof(double)));
+  checkCudaErrors(cudaMemset(d_processed_distances, 0, N * (N + 1) / 2 * sizeof(double)));
   checkCudaErrors(cudaMemset(d_solution, 3, N * DIMENSIONS_LOWER * sizeof(double)));
 
   checkCudaErrors(cudaMemcpy(d_solution, solution, N * DIMENSIONS_LOWER * sizeof(double),
                              cudaMemcpyHostToDevice));
-// print solution
-  for(int i = 0; i < N ; i++) {
-    for(int j = 0; j < DIMENSIONS_LOWER; j++) {
-      std::cout << "solution[" << i << "][" << j << "] = " << solution[i * DIMENSIONS_LOWER + j] << std::endl;
-    }
-  }
-  for(int i = 0; i < 1; i++) {
+
+  set_lerning_rates_device(d_lerning_rates, 100.0, N * DIMENSIONS_LOWER);
+  // print initial (random) solution to check if it was copied correctly
+  // for(int i = 0; i < N ; i++) {
+  //   for(int j = 0; j < DIMENSIONS_LOWER; j++) {
+  //     std::cout << "solution[" << i << "][" << j << "] = " << solution[i * DIMENSIONS_LOWER + j] << std::endl;
+  //   }
+  // }
+
+  // parameters for gradient descent
+  double alpha = 0.9; // momentum
+
+  // for delta bar delta
+  double kappa = 3.75;
+  double fi = 0.1;
+  double theta = 0.7;
+
+  for(int i = 0; i < 100; i++) {
     calculate_distances<<<(N + 1) / 2, THREADS>>>(d_solution, d_processed_distances, DIMENSIONS_LOWER, N);
     checkCudaErrors(cudaDeviceSynchronize());
 
     process_distances<<<(N + 1) / 2, THREADS>>>(d_processed_distances, d_denominator_for_block, N);
     checkCudaErrors(cudaDeviceSynchronize());
 
-    double denominator = sum_arr_from_device(d_denominator_for_block, (N + 1) / 2);
+    double denominator = 2 * sum_arr_from_device(d_denominator_for_block, (N + 1) / 2); // its important to
+    // multiply by 2 because we are operating on half of the matrix, we want our array to sum up to 0.5 so whole matrix sums up to 1
+    // just like in p_ij
 
     calculate_gradient<<<N, THREADS>>>(p_sym_device, d_processed_distances, d_solution, denominator, d_grad, N);
+
+    // just for curiosity - calculate kulback leibler divergence
+    __global__ void calculate_Kullback_Leibler(double *p, double *processed_distances, double denominator, double* partial_ans, int n);
+    calculate_Kullback_Leibler<<<(N + 1) / 2, THREADS>>>(p_sym_device, d_processed_distances, denominator,d_kullback_leibler,  N);
+    checkCudaErrors(cudaDeviceSynchronize());
+    double kullback_leibler = 2 * sum_arr_from_device(d_kullback_leibler, (N + 1) / 2); // cuz its half of the matrix
+    std::cout << "Kullback Leibler divergence: " << kullback_leibler << std::endl;
+    std::cout << "iteration: " << i << std::endl;
+    // std::cout << "q summed: " << sum_arr_from_device(d_processed_distances, N * (N + 1) / 2) / denominator << std::endl;
+    // std::cout << "denominator: " << denominator << std::endl;
+    // std::cout << "p summed: " << sum_arr_from_device(p_sym_device, N * (N + 1) / 2) << std::endl;
+
+    // update solution
+    make_step_and_update_learning_rate<<<(N + 255) / 256, 256>>>(d_solution, d_solution_old, d_grad, d_lerning_rates, alpha,
+                                                    theta, d_delta_bar, kappa, fi, DIMENSIONS_LOWER, N);
+
   }
 
   // print gradient
   double* grad = (double *)malloc(N * DIMENSIONS_LOWER * sizeof(double));
   checkCudaErrors(cudaMemcpy(grad, d_grad, N * DIMENSIONS_LOWER * sizeof(double),
                              cudaMemcpyDeviceToHost));
-  for(int i = 0; i < N ; i++) {
-    for(int j = 0; j < DIMENSIONS_LOWER; j++) {
-      std::cout << "grad[" << i << "][" << j << "] = " << grad[i * DIMENSIONS_LOWER + j] << std::endl;
-    }
-  }
 
+  // for(int i = 0; i < N ; i++) {
+  //   for(int j = 0; j < DIMENSIONS_LOWER; j++) {
+  //     std::cout << "grad[" << i << "][" << j << "] = " << grad[i * DIMENSIONS_LOWER + j] << std::endl;
+  //   }
+  // }
+
+  checkCudaErrors(cudaMemcpy(solution, d_solution, N * DIMENSIONS_LOWER * sizeof(double),
+                             cudaMemcpyDeviceToHost));
+  // open file to save solution
+  FILE *f = fopen("solution.txt", "w");
+  fprintf(f, "x, y\n");
+  for(int i = 0; i < N; i++) {
+    for(int j = 0; j < DIMENSIONS_LOWER; j++) {
+      fprintf(f, "%f", solution[i * DIMENSIONS_LOWER + j]);
+      if(j != DIMENSIONS_LOWER - 1)
+        fprintf(f, ", ");
+    }
+    fprintf(f, "\n");
+  }
   // free memory
   checkCudaErrors(cudaFree(dData));
   // checkCudaErrors(cudaFree(distances_device));

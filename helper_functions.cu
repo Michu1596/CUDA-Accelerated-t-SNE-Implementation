@@ -209,15 +209,12 @@ __global__ void calculate_p_sym(double *p_asym, double *p_sym, int n){
 }
 
 __global__ void process_distances(double *distances, double*denominator_for_block, int n){
-  // int idx = blockIdx.x * blockDim.x + threadIdx.x;
   int stride = blockDim.x;
-  // calculate distance to each data point with lower index
-
   int triangle_index = 0;
   __shared__ double shared_denominator[THREADS];
-
   shared_denominator[threadIdx.x] = 0;
-  // column myPoint
+
+  // column i
   int i = blockIdx.x;
   int j = i - 1 - threadIdx.x; // this version with divergent memory access is 3 x faster (wow)
   while(j >= 0 && i < n){
@@ -229,11 +226,10 @@ __global__ void process_distances(double *distances, double*denominator_for_bloc
     j -= stride;
   }
 
-  // column N - myPoint
+  // column N - i
   i = n - i - 1;
   j = i - 1 - threadIdx.x;
   // yes this is the same code as above but I don't want to make a function for this
-  
   while(j >= 0 && i < n){
     triangle_index = TRIANGLE(i, j);
     
@@ -263,6 +259,7 @@ __global__ void process_distances(double *distances, double*denominator_for_bloc
   }
 
 }
+
 
 __global__ void calculate_gradient(double *p, double *processed_distances, double *y, double denominator, double *grad, int n){
   int i = blockIdx.x;
@@ -311,4 +308,91 @@ __global__ void calculate_gradient(double *p, double *processed_distances, doubl
       }
     }
 
+}
+
+__global__ void calculate_Kullback_Leibler(double *p, double *processed_distances, double denominator, double* partial_ans, int n){
+  int stride = blockDim.x;
+  int triangle_index = 0;
+  __shared__ double shared_kullback[THREADS];
+  shared_kullback[threadIdx.x] = 0;
+
+  // column i
+  int i = blockIdx.x;
+  int j = i - 1 - threadIdx.x; 
+  while(j >= 0 && i < n){
+    triangle_index = TRIANGLE(i, j);
+    
+    double q = processed_distances[triangle_index] / denominator;
+    shared_kullback[threadIdx.x] += p[triangle_index] * log(p[triangle_index] / q);
+
+    j -= stride;
+  }
+
+  // column N - i
+  i = n - i - 1;
+  j = i - 1 - threadIdx.x;
+  // yes this is the same code as above but I don't want to make a function for this
+  while(j >= 0 && i < n){
+    triangle_index = TRIANGLE(i, j);
+    
+    double q = processed_distances[triangle_index] / denominator;
+    shared_kullback[threadIdx.x] += p[triangle_index] * log(p[triangle_index] / q);
+    
+    j -= stride;
+  }
+  
+
+  int limit = THREADS / 2;
+   __syncthreads();
+
+    while ( limit > 0)
+    {
+      if(threadIdx.x < limit){
+        shared_kullback[threadIdx.x] += shared_kullback[threadIdx.x + limit];
+      }
+      limit /= 2;
+      __syncthreads();
+    }
+
+    __syncthreads();
+  
+  if(threadIdx.x == 0){
+    partial_ans[blockIdx.x] = shared_kullback[0];
+  }
+
+}
+
+__global__ void make_step_and_update_learning_rate(double *y, double *old_y, double *grad, double *learning_rates, double alpha,
+                                                    double theta, double *d_delta_bar,double kappa, double fi, int dim_lower, int n)
+{
+    int j = threadIdx.x + blockIdx.y * blockDim.x;
+
+  if(j < n){
+    for(int k = 0; k < dim_lower; k++){
+      // index of the element in the y array
+      int index = j * dim_lower + k;
+
+      // update y
+      double momentum = alpha * (y[index] - old_y[index]);
+      old_y[index] = y[index]; // update old_y
+      y[index] = y[index] - learning_rates[j] * grad[index] + momentum; // TODO add noise
+
+      // update learning rate
+      if(grad[index] * d_delta_bar[index] > 0){
+        learning_rates[index] = learning_rates[index] + kappa < MAX_LEARNING_RATE ? learning_rates[index] + kappa : MAX_LEARNING_RATE;
+      }
+      else{
+        learning_rates[index] = learning_rates[index] * fi; 
+      }
+
+      // update average gradient
+      d_delta_bar[index] = (1 - theta) * grad[index] + theta * d_delta_bar[index];
+    }
+  }
+  if(blockIdx.x == 0 && threadIdx.x == 0){
+    printf("y[0] = %f\n", y[0]);
+    printf("learning_rates[0] = %f\n", learning_rates[0]);
+    printf("d_delta_bar[0] = %f\n", d_delta_bar[0]);
+    printf("grad[0] = %f\n", grad[0]);
+  }
 }
