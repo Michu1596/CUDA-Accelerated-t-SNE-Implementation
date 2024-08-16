@@ -193,7 +193,10 @@ __global__ void calculate_p_sym(double *p_asym, double *p_sym, int n){
   int j = i - 1 - threadIdx.x; // this version with divergent memory access is 3 x faster (wow)
   while(j >= 0 && i < n){
     triangle_index = TRIANGLE(i, j);
-    p_sym[triangle_index] = (p_asym[i * n + j] + p_asym[j * n + i]) / (2 * n);
+    double p = ((p_asym[i * n + j] + p_asym[j * n + i]) / (2 * n));
+    p *= P_MULTIPLIER;
+    
+    p_sym[triangle_index] = p;
     j -= stride;
   }
 
@@ -203,7 +206,10 @@ __global__ void calculate_p_sym(double *p_asym, double *p_sym, int n){
   // yes this is the same code as above but I don't want to make a function for this
   while(j >= 0 && i < n){
     triangle_index = TRIANGLE(i, j);
-    p_sym[triangle_index] = (p_asym[i * n + j] + p_asym[j * n + i]) / (2 * n);
+    double p = ((p_asym[i * n + j] + p_asym[j * n + i]) / (2 * n));
+    p *= P_MULTIPLIER;
+
+    p_sym[triangle_index] = p;
     j -= stride;
   }
 }
@@ -225,6 +231,7 @@ __global__ void process_distances(double *distances, double*denominator_for_bloc
 
     j -= stride;
   }
+
 
   // column N - i
   i = n - i - 1;
@@ -323,7 +330,8 @@ __global__ void calculate_Kullback_Leibler(double *p, double *processed_distance
     triangle_index = TRIANGLE(i, j);
     
     double q = processed_distances[triangle_index] / denominator;
-    shared_kullback[threadIdx.x] += p[triangle_index] * log(p[triangle_index] / q);
+    if(p[triangle_index] != 0)
+      shared_kullback[threadIdx.x] += p[triangle_index] * log(p[triangle_index] / q);
 
     j -= stride;
   }
@@ -336,7 +344,8 @@ __global__ void calculate_Kullback_Leibler(double *p, double *processed_distance
     triangle_index = TRIANGLE(i, j);
     
     double q = processed_distances[triangle_index] / denominator;
-    shared_kullback[threadIdx.x] += p[triangle_index] * log(p[triangle_index] / q);
+    if(p[triangle_index] != 0)
+      shared_kullback[threadIdx.x] += p[triangle_index] * log(p[triangle_index] / q);
     
     j -= stride;
   }
@@ -365,7 +374,7 @@ __global__ void calculate_Kullback_Leibler(double *p, double *processed_distance
 __global__ void make_step_and_update_learning_rate(double *y, double *old_y, double *grad, double *learning_rates, double alpha,
                                                     double theta, double *d_delta_bar,double kappa, double fi, int dim_lower, int n)
 {
-    int j = threadIdx.x + blockIdx.y * blockDim.x;
+    int j = threadIdx.x + blockIdx.x * blockDim.x;
 
   if(j < n){
     for(int k = 0; k < dim_lower; k++){
@@ -389,10 +398,10 @@ __global__ void make_step_and_update_learning_rate(double *y, double *old_y, dou
       d_delta_bar[index] = (1 - theta) * grad[index] + theta * d_delta_bar[index];
     }
   }
-  if(blockIdx.x == 0 && threadIdx.x == 0){
-    printf("y[0] = %f\n", y[0]);
-    printf("learning_rates[0] = %f\n", learning_rates[0]);
-    printf("d_delta_bar[0] = %f\n", d_delta_bar[0]);
-    printf("grad[0] = %f\n", grad[0]);
-  }
+  // if(j == 309){
+  //   printf("y[0] = %f\n", y[0]);
+  //   printf("learning_rates[0] = %f\n", learning_rates[0]);
+  //   printf("d_delta_bar[0] = %f\n", d_delta_bar[0]);
+  //   printf("grad[0] = %f\n", grad[0]);
+  // }
 }

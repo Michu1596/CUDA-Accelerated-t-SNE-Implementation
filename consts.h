@@ -1,5 +1,6 @@
 #define DIMENSIONS 30
-#define N 160
+#define N 1000
 #define THREADS 256
 #define DIMENSIONS_LOWER 2
 #define MAX_LEARNING_RATE 10000
+#define P_MULTIPLIER 4.0
