@@ -48,9 +48,12 @@ void init_fake_data(double *data) {
   }
 }
 
-void sample_initial_solution(double *solution) {
+void sample_initial_solution(double *solution, int seed) {
   std::normal_distribution<float> distribution(0.0, 1.0);
   std::default_random_engine generator;
+  // set seed
+  generator.seed(seed);
+
 
   for(int i = 0; i < N * DIMENSIONS_LOWER; i++) {
     solution[i] = distribution(generator) / 10000;
@@ -108,7 +111,7 @@ void modify_p_sym(double* p_sym_device, int n) {
   for(int i = 0; i < N; i++) {
     for(int j = 0; j < i; j++) {
       double p = p_sym_host[TRIANGLE(i, j)];
-      p /= P_DIVIDER;
+      p /= P_MULTIPLIER;
       p_sym_host[TRIANGLE(i, j)] = p;
     }
   }
@@ -167,7 +170,12 @@ int main(int argc, char **argv) {
 
   // init data and copy to device
   // init_fake_data();
-  sample_initial_solution(solution);
+  int seed = 0;
+  if(argc > 1) {
+    seed = atoi(argv[1]);
+  }
+    
+  sample_initial_solution(solution, seed);
   
                             
   // make timer
@@ -177,7 +185,7 @@ int main(int argc, char **argv) {
 
   sdkCreateTimer(&timer);
   sdkStartTimer(&timer);
-  read_lines_from_file("/home/micha-nowicki/Dokumenty/tSNE1/transformed.csv", data, N * DIMENSIONS);
+  read_lines_from_file("/home/micha-nowicki/Dokumenty/tSNE1/transformed6k.csv", data, N * DIMENSIONS);
   checkCudaErrors(cudaMemcpy(d_data, data, N * DIMENSIONS * sizeof(double),
                              cudaMemcpyHostToDevice));
   sdkStopTimer(&timer);
@@ -274,24 +282,25 @@ int main(int argc, char **argv) {
   sdkCreateTimer(&timer);
   sdkStartTimer(&timer);
   for(int i = 0; i < 5000; i++) {
-    if(i == 300){
+    if(i == 50){
       modify_p_sym(p_sym_device, N);
     }
     
     calculate_distances<<<(N + 1) / 2, THREADS>>>(d_solution, d_processed_distances, DIMENSIONS_LOWER, N);
-    checkCudaErrors(cudaDeviceSynchronize());
+    // checkCudaErrors(cudaDeviceSynchronize());
     
 
     process_distances<<<(N + 1) / 2, THREADS>>>(d_processed_distances, d_denominator_for_block, N);
     checkCudaErrors(cudaDeviceSynchronize());
 
 
+    // TODO add this to second stream and run in parallel
     double denominator = 2 * sum_arr_from_device(d_denominator_for_block, (N + 1) / 2); // its important to
     // multiply by 2 because we are operating on half of the matrix, we want our array to sum up to 0.5 so whole matrix sums up to 1
     // just like in p_ij
 
     calculate_gradient<<<N, THREADS>>>(p_sym_device, d_processed_distances, d_solution, denominator, d_grad, N);
-    checkCudaErrors(cudaDeviceSynchronize());
+    // checkCudaErrors(cudaDeviceSynchronize());
 
     // just for curiosity - calculate kulback leibler divergence
     // calculate_Kullback_Leibler<<<(N + 1) / 2, THREADS>>>(p_sym_device, d_processed_distances, denominator,d_kullback_leibler,  N);
