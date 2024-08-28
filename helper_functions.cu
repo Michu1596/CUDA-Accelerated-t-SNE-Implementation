@@ -13,12 +13,16 @@
 
 #include "helper_functions.h"
 #include "consts.h"
-#define TRIANGLE(X, Y) ( X < Y ? (Y * (Y + 1) / 2 + X) : (X * (X + 1) / 2 + Y) )
+#define TRIANGLE(X, Y) ( X < Y ? ( (Y) * ( (Y)  + 1) / 2 + (X) ) : ( (X) * ( (X) + 1) / 2 + (Y) ) ) 
+// they must be in prenthesis because if X = var1 + var2 * var3, then the macro would expand to X < var1 + var2 * var3 < Y
+
 //   0 1 2 3 4
 // 0 0
 // 1 1 2
 // 2 3 4 5
 // 3 6 7 8 9
+// 4 10 11 12 13 14
+// 5 15 16 17 18 19 20
 
 __device__ double l2_dist_sq(double *a, double *b, int n) {
   double sum = 0;
@@ -44,7 +48,8 @@ __global__ void calculate_distances(double *d_data,double* distances, int dim, i
   int otherPoint = myPoint - 1 - threadIdx.x; // this version with divergent memory access is 3 x faster (wow)
   while(otherPoint >= 0 && myPoint < n){
     triangle_index = TRIANGLE(myPoint, otherPoint);
-    distances[triangle_index] = l2_dist_sq(d_data + myPoint * dim, d_data + otherPoint * dim, dim);
+    double result = l2_dist_sq(d_data + myPoint * dim, d_data + otherPoint * dim, dim);
+    distances[triangle_index] = result;
     otherPoint -= stride;
   }
 
@@ -57,6 +62,49 @@ __global__ void calculate_distances(double *d_data,double* distances, int dim, i
     otherPoint -= stride;
   }
 
+}
+
+__global__ void calculate_distances_tiled(double *d_data,double* distances, int dim, int n){
+  __shared__ double chunk_x[DIMENSIONS * TILE_WIDTH];
+  __shared__ double chunk_y[DIMENSIONS * TILE_WIDTH];
+
+  int bx = blockIdx.x;
+  int by = blockIdx.y;
+  int tx = threadIdx.x;
+  int ty = threadIdx.y;
+
+  int stride = blockDim.x * blockDim.y;
+  int in_block_linear_index = tx + ty * blockDim.x;
+
+  // not all blocks are needed
+  if(bx > by){
+    return; 
+  }
+
+  // colaborative loading
+
+  // first chunk x
+  for(int i = in_block_linear_index; i < DIMENSIONS * TILE_WIDTH; i += stride){
+    chunk_x[i] = d_data[(bx * blockDim.x * DIMENSIONS) + i];
+  }
+  // second chunk y
+  for(int i = in_block_linear_index; i < DIMENSIONS * TILE_WIDTH; i += stride){
+    chunk_y[i] = d_data[(by * blockDim.y * DIMENSIONS) + i];
+  }
+
+  __syncthreads();
+
+  // thread divergence saddly
+  if(bx == by && tx >= ty){
+    return;
+  }
+
+  // calculate distance
+  double distance = l2_dist_sq(chunk_x + tx * DIMENSIONS, chunk_y + ty * DIMENSIONS, dim);
+  int triangle_index = TRIANGLE(bx * blockDim.x + tx, by * blockDim.y + ty);
+
+  // write to global memory
+  distances[triangle_index] = distance;
 }
 
 // each block is responsible for a single value of sigma for p_{j|blockId} for all j

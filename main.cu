@@ -127,6 +127,7 @@ int main(int argc, char **argv) {
   
   double *d_data;
   double *distances_device;
+  double *distances_device2;
   double *sigmas_device;
   double *sigmas_host;
   double *denominators_device; // for calculating pji - we can calculate it in the same kernel as sigmas
@@ -141,6 +142,9 @@ int main(int argc, char **argv) {
 
   checkCudaErrors(cudaMalloc(&distances_device, N * (N + 1) / 2 * sizeof(double)));
   checkCudaErrors(cudaMemset(distances_device, -1, N * (N + 1) / 2 * sizeof(double)));
+
+  checkCudaErrors(cudaMalloc(&distances_device2, N * (N + 1) / 2 * sizeof(double)));
+  checkCudaErrors(cudaMemset(distances_device2, -1, N * (N + 1) / 2 * sizeof(double)));
 
   checkCudaErrors(cudaMalloc(&denominators_device, N * sizeof(double)));
   checkCudaErrors(cudaMemset(denominators_device, -1, N * sizeof(double)));
@@ -197,17 +201,37 @@ int main(int argc, char **argv) {
   calculate_distances<<<(N + 1) / 2, THREADS>>>(d_data, distances_device, DIMENSIONS, N);  
   checkCudaErrors(cudaDeviceSynchronize());
   sdkStopTimer(&timer);
-  std::cout << "Kernel time: " << sdkGetTimerValue(&timer) << std::endl;
+  std::cout << "distances time: " << sdkGetTimerValue(&timer) << std::endl;
+
+  // calculate distances tiled
+  sdkCreateTimer(&timer);
+  sdkStartTimer(&timer);
+  dim3 block_size(TILE_WIDTH, TILE_WIDTH);
+  
+  dim3 blocks((N + block_size.x - 1) / block_size.x, (N + block_size.y - 1) / block_size.y);
+  calculate_distances_tiled<<<blocks, block_size>>>(d_data, distances_device2, DIMENSIONS, N);
+  checkCudaErrors(cudaDeviceSynchronize());
+  sdkStopTimer(&timer);
+  std::cout << "distances tiled time: " << sdkGetTimerValue(&timer) << std::endl;
 
   // debug Distance
   double *distances_host = (double *)malloc(N * (N + 1) / 2 * sizeof(double));
   checkCudaErrors(cudaMemcpy(distances_host, distances_device, N * (N + 1) / 2 * sizeof(double),
                              cudaMemcpyDeviceToHost));
-  // for(int i = 0; i < N; i++) {
-  //   for(int j = 0; j < i; j++) {
-  //     std::cout << "distances[" << i << "][" << j << "] = " << distances_host[TRIANGLE(i, j)] << std::endl;
-  //   }
-  // }
+
+  double *distances_host2 = (double *)malloc(N * (N + 1) / 2 * sizeof(double));
+  checkCudaErrors(cudaMemcpy(distances_host2, distances_device2, N * (N + 1) / 2 * sizeof(double),
+                             cudaMemcpyDeviceToHost));
+  for(int i = 0; i < N; i++) {
+    for(int j = 0; j < i; j++) {
+      if(distances_host2[TRIANGLE(i, j)] - distances_host[TRIANGLE(i, j)] > 0.0001 
+        || distances_host2[TRIANGLE(i, j)] - distances_host[TRIANGLE(i, j)] < -0.0001) {
+        std::cout << "distances[" << i << "][" << j << "] = " << distances_host[TRIANGLE(i, j)] << " distances2[" << i << "][" << j << "] = " << distances_host2[TRIANGLE(i, j)] << std::endl;
+      }
+      // else
+        // std::cout << "distances[" << i << "][" << j << "] = " << distances_host[TRIANGLE(i, j)] << " distances2[" << i << "][" << j << "] = " << distances_host2[TRIANGLE(i, j)] << " OK" << std::endl;
+    }
+  }
 
   // calculating sigmas
   double perplexity = 40.0;
@@ -294,7 +318,7 @@ int main(int argc, char **argv) {
     checkCudaErrors(cudaDeviceSynchronize());
 
 
-    // TODO add this to second stream and run in parallel
+    // TODO add this to second stream and run in parallel EDIT: naah
     double denominator = 2 * sum_arr_from_device(d_denominator_for_block, (N + 1) / 2); // its important to
     // multiply by 2 because we are operating on half of the matrix, we want our array to sum up to 0.5 so whole matrix sums up to 1
     // just like in p_ij
