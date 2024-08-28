@@ -123,6 +123,18 @@ void modify_p_sym(double* p_sym_device, int n) {
   free(p_sym_host);
 }
 
+void calculate_distances_wrapper(double* d_data, double* distances_device, int dimensions, int n) {
+  if(dimensions < DIMENSION_LIMIT_FOR_USING_TILED_KERNEL)
+    calculate_distances<<<(n + 1) / 2, THREADS>>>(d_data, distances_device, dimensions, n);
+  else {
+    dim3 block_size(TILE_WIDTH, TILE_WIDTH);
+    dim3 blocks((n + block_size.x - 1) / block_size.x, (n + block_size.y - 1) / block_size.y);
+    calculate_distances_tiled<<<blocks, block_size,
+               dimensions * TILE_WIDTH * 2 * sizeof(double)>>>
+               (d_data, distances_device, dimensions, n);
+  }
+}
+
 int main(int argc, char **argv) {
   
   double *d_data;
@@ -198,21 +210,11 @@ int main(int argc, char **argv) {
   // calculate distances
   sdkCreateTimer(&timer);
   sdkStartTimer(&timer);
-  calculate_distances<<<(N + 1) / 2, THREADS>>>(d_data, distances_device, DIMENSIONS, N);  
+  calculate_distances_wrapper(d_data, distances_device, DIMENSIONS, N);
   checkCudaErrors(cudaDeviceSynchronize());
   sdkStopTimer(&timer);
   std::cout << "distances time: " << sdkGetTimerValue(&timer) << std::endl;
 
-  // calculate distances tiled
-  sdkCreateTimer(&timer);
-  sdkStartTimer(&timer);
-  dim3 block_size(TILE_WIDTH, TILE_WIDTH);
-  
-  dim3 blocks((N + block_size.x - 1) / block_size.x, (N + block_size.y - 1) / block_size.y);
-  calculate_distances_tiled<<<blocks, block_size>>>(d_data, distances_device2, DIMENSIONS, N);
-  checkCudaErrors(cudaDeviceSynchronize());
-  sdkStopTimer(&timer);
-  std::cout << "distances tiled time: " << sdkGetTimerValue(&timer) << std::endl;
 
   // debug Distance
   double *distances_host = (double *)malloc(N * (N + 1) / 2 * sizeof(double));
@@ -310,9 +312,9 @@ int main(int argc, char **argv) {
       modify_p_sym(p_sym_device, N);
     }
     
-    calculate_distances<<<(N + 1) / 2, THREADS>>>(d_solution, d_processed_distances, DIMENSIONS_LOWER, N);
-    // checkCudaErrors(cudaDeviceSynchronize());
-    
+    // calculate_distances<<<(N + 1) / 2, THREADS>>>(d_solution, d_processed_distances, DIMENSIONS_LOWER, N); - deprecated
+    calculate_distances_wrapper(d_solution, distances_device2, DIMENSIONS_LOWER, N);
+    checkCudaErrors(cudaDeviceSynchronize());
 
     process_distances<<<(N + 1) / 2, THREADS>>>(d_processed_distances, d_denominator_for_block, N);
     checkCudaErrors(cudaDeviceSynchronize());

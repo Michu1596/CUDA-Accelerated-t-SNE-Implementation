@@ -35,6 +35,7 @@ __device__ double l2_dist_sq(double *a, double *b, int n) {
 }
 
 
+
 // each block is responsible a column x and N - x so each block calculates N + 1 distances
 __global__ void calculate_distances(double *d_data,double* distances, int dim, int n) {
   // int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -65,8 +66,9 @@ __global__ void calculate_distances(double *d_data,double* distances, int dim, i
 }
 
 __global__ void calculate_distances_tiled(double *d_data,double* distances, int dim, int n){
-  __shared__ double chunk_x[DIMENSIONS * TILE_WIDTH];
-  __shared__ double chunk_y[DIMENSIONS * TILE_WIDTH];
+  extern __shared__ double s[];
+  double *chunk_x = s;
+  double *chunk_y = s + dim * TILE_WIDTH;
 
   int bx = blockIdx.x;
   int by = blockIdx.y;
@@ -84,12 +86,12 @@ __global__ void calculate_distances_tiled(double *d_data,double* distances, int 
   // colaborative loading
 
   // first chunk x
-  for(int i = in_block_linear_index; i < DIMENSIONS * TILE_WIDTH; i += stride){
-    chunk_x[i] = d_data[(bx * blockDim.x * DIMENSIONS) + i];
+  for(int i = in_block_linear_index; i < dim * TILE_WIDTH; i += stride){
+    chunk_x[i] = d_data[(bx * blockDim.x * dim) + i];
   }
   // second chunk y
-  for(int i = in_block_linear_index; i < DIMENSIONS * TILE_WIDTH; i += stride){
-    chunk_y[i] = d_data[(by * blockDim.y * DIMENSIONS) + i];
+  for(int i = in_block_linear_index; i < dim * TILE_WIDTH; i += stride){
+    chunk_y[i] = d_data[(by * blockDim.y * dim) + i];
   }
 
   __syncthreads();
@@ -100,7 +102,7 @@ __global__ void calculate_distances_tiled(double *d_data,double* distances, int 
   }
 
   // calculate distance
-  double distance = l2_dist_sq(chunk_x + tx * DIMENSIONS, chunk_y + ty * DIMENSIONS, dim);
+  double distance = l2_dist_sq(chunk_x + tx * dim, chunk_y + ty * dim, dim);
   int triangle_index = TRIANGLE(bx * blockDim.x + tx, by * blockDim.y + ty);
 
   // write to global memory
