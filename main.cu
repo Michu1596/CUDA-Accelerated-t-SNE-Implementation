@@ -307,26 +307,48 @@ int main(int argc, char **argv) {
   // reset timer
   sdkCreateTimer(&timer);
   sdkStartTimer(&timer);
-  for(int i = 0; i < 5000; i++) {
+
+  StopWatchInterface *timer_distances = NULL;
+  StopWatchInterface *timer_process_distances = NULL;
+  StopWatchInterface *timer_sum_arr = NULL;
+  StopWatchInterface *timer_calculate_gradient = NULL;
+  StopWatchInterface *timer_make_step = NULL;
+
+  sdkCreateTimer(&timer_distances);
+  sdkCreateTimer(&timer_process_distances);
+  sdkCreateTimer(&timer_sum_arr);
+  sdkCreateTimer(&timer_calculate_gradient);
+  sdkCreateTimer(&timer_make_step);
+
+  for(int i = 0; i < ITERATIONS; i++) {
     if(i == 50){
       modify_p_sym(p_sym_device, N);
     }
     
-    // calculate_distances<<<(N + 1) / 2, THREADS>>>(d_solution, d_processed_distances, DIMENSIONS_LOWER, N); - deprecated
-    calculate_distances_wrapper(d_solution, distances_device2, DIMENSIONS_LOWER, N);
+    sdkStartTimer(&timer_distances);
+    // calculate_distances_wrapper(d_solution, d_processed_distances, DIMENSIONS_LOWER, N);
+    calculate_and_process_distances<<<(N + 1) / 2, THREADS>>>(d_solution, d_processed_distances,d_denominator_for_block, DIMENSIONS_LOWER, N);
     checkCudaErrors(cudaDeviceSynchronize());
+    sdkStopTimer(&timer_distances);
 
-    process_distances<<<(N + 1) / 2, THREADS>>>(d_processed_distances, d_denominator_for_block, N);
+    sdkStartTimer(&timer_process_distances);
+    // process_distances<<<(N + 1) / 2, THREADS>>>(d_processed_distances, d_denominator_for_block, N);
     checkCudaErrors(cudaDeviceSynchronize());
+    sdkStopTimer(&timer_process_distances);
 
 
+    sdkStartTimer(&timer_sum_arr);
     // TODO add this to second stream and run in parallel EDIT: naah
     double denominator = 2 * sum_arr_from_device(d_denominator_for_block, (N + 1) / 2); // its important to
     // multiply by 2 because we are operating on half of the matrix, we want our array to sum up to 0.5 so whole matrix sums up to 1
     // just like in p_ij
+    sdkStopTimer(&timer_sum_arr);
 
+
+    sdkStartTimer(&timer_calculate_gradient);
     calculate_gradient<<<N, THREADS>>>(p_sym_device, d_processed_distances, d_solution, denominator, d_grad, N);
-    // checkCudaErrors(cudaDeviceSynchronize());
+    checkCudaErrors(cudaDeviceSynchronize());
+    sdkStopTimer(&timer_calculate_gradient);
 
     // just for curiosity - calculate kulback leibler divergence
     // calculate_Kullback_Leibler<<<(N + 1) / 2, THREADS>>>(p_sym_device, d_processed_distances, denominator,d_kullback_leibler,  N);
@@ -341,13 +363,23 @@ int main(int argc, char **argv) {
     if(i > 250)
       alpha = 0.8;
     // update solution
+
+    sdkStartTimer(&timer_make_step);
     make_step_and_update_learning_rate<<<(N + 255) / 256, 256>>>(d_solution, d_solution_old, d_grad, d_lerning_rates, alpha,
                                                     theta, d_delta_bar, kappa, fi, DIMENSIONS_LOWER, N);
+    checkCudaErrors(cudaDeviceSynchronize());
+    sdkStopTimer(&timer_make_step);
 
 
   }
   sdkStopTimer(&timer);
-  std::cout << "Gradient descent time: " << sdkGetTimerValue(&timer) << std::endl;
+  std::cout << "Total gradient descent time: " << sdkGetTimerValue(&timer) << std::endl;
+  std::cout << "avg. distances time: " << sdkGetTimerValue(&timer_distances) / ITERATIONS << std::endl;
+  std::cout << "avg. process_distances time: " << sdkGetTimerValue(&timer_process_distances) / ITERATIONS  << std::endl;
+  std::cout << "avg.sum_arr time: " << sdkGetTimerValue(&timer_sum_arr) / ITERATIONS << std::endl;
+  std::cout << "avg. calculate_gradient time: " << sdkGetTimerValue(&timer_calculate_gradient) / ITERATIONS << std::endl;
+  std::cout << "avg. make_step time: " << sdkGetTimerValue(&timer_make_step) / ITERATIONS << std::endl;
+
 
   // print gradient
   double* grad = (double *)malloc(N * DIMENSIONS_LOWER * sizeof(double));
