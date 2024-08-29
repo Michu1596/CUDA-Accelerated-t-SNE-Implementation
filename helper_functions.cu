@@ -264,24 +264,25 @@ __global__ void calculate_p_sym(double *p_asym, double *p_sym, int n){
   }
 }
 
+// two times slower than calculate_distances
 __global__ void process_distances(double *distances, double*denominator_for_block, int n){
   int stride = blockDim.x;
   int triangle_index = 0;
   __shared__ double shared_denominator[THREADS];
   shared_denominator[threadIdx.x] = 0;
 
+  // inverting distances
   // column i
   int i = blockIdx.x;
   int j = i - 1 - threadIdx.x; // this version with divergent memory access is 3 x faster (wow)
   while(j >= 0 && i < n){
     triangle_index = TRIANGLE(i, j);
     
-    distances[triangle_index] = 1 / (1 + distances[triangle_index]);
+    distances[triangle_index] = 1 / (1 + distances[triangle_index]); // this processing is very expensive it takes about half of the time
     shared_denominator[threadIdx.x] += distances[triangle_index];
 
     j -= stride;
   }
-
 
   // column N - i
   i = n - i - 1;
@@ -296,7 +297,7 @@ __global__ void process_distances(double *distances, double*denominator_for_bloc
     j -= stride;
   }
   
-
+  // calculate denominator 
   int limit = THREADS / 2;
    __syncthreads();
 
@@ -311,6 +312,7 @@ __global__ void process_distances(double *distances, double*denominator_for_bloc
 
     __syncthreads();
   
+  // save denominator
   if(threadIdx.x == 0){
     denominator_for_block[blockIdx.x] = shared_denominator[0];
   }
