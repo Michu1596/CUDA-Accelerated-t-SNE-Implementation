@@ -277,6 +277,10 @@ int main(int argc, char **argv) {
   std::cout << "Kernel p_sym time: " << sdkGetTimerValue(&timer) << std::endl;
   std::cout << "p_sym summed: " << sum_arr_from_device(p_sym_device, N * (N + 1) / 2) << std::endl;
 
+  // make matrix from p_sym
+  double *p_sym_matrix_device = p_asym_device;
+  square_matrix_from_triangle<<<N, THREADS>>>(p_sym_matrix_device, p_sym_device, 1, N);
+
   // grtadient descent
   double* d_processed_distances;   // divided by q denoinator gives q (low dim affinites)
   double* d_solution;              // low dim solution
@@ -286,6 +290,7 @@ int main(int argc, char **argv) {
   double* d_lerning_rates;         // learning rates for each parameter
   double* d_delta_bar;             // exponential average of partial derivatives
   double* d_kullback_leibler;      // for calculating kullback leibler divergence - just for curiosity
+  double* d_processed_distances_matrix; // matrix from d_processed_distances
   checkCudaErrors(cudaMalloc(&d_processed_distances, N * (N + 1) / 2 * sizeof(double)));
   checkCudaErrors(cudaMalloc(&d_solution, N * DIMENSIONS_LOWER * sizeof(double)));
   checkCudaErrors(cudaMalloc(&d_solution_old, N * DIMENSIONS_LOWER * sizeof(double)));
@@ -294,6 +299,7 @@ int main(int argc, char **argv) {
   checkCudaErrors(cudaMalloc(&d_lerning_rates, N * DIMENSIONS_LOWER * sizeof(double)));
   checkCudaErrors(cudaMalloc(&d_delta_bar, N * DIMENSIONS_LOWER * sizeof(double)));
   checkCudaErrors(cudaMalloc(&d_kullback_leibler, (N + 1) / 2 * sizeof(double)));
+  checkCudaErrors(cudaMalloc(&d_processed_distances_matrix, N * N * sizeof(double)));
 
   checkCudaErrors(cudaMemset(d_processed_distances, 0, N * (N + 1) / 2 * sizeof(double)));
   checkCudaErrors(cudaMemset(d_solution, 3, N * DIMENSIONS_LOWER * sizeof(double)));
@@ -323,12 +329,14 @@ int main(int argc, char **argv) {
   StopWatchInterface *timer_sum_arr = NULL;
   StopWatchInterface *timer_calculate_gradient = NULL;
   StopWatchInterface *timer_make_step = NULL;
+  StopWatchInterface *timer_matrix_conversion = NULL;
 
   sdkCreateTimer(&timer_distances);
   sdkCreateTimer(&timer_process_distances);
   sdkCreateTimer(&timer_sum_arr);
   sdkCreateTimer(&timer_calculate_gradient);
   sdkCreateTimer(&timer_make_step);
+  sdkCreateTimer(&timer_matrix_conversion);
 
   for(int i = 0; i < ITERATIONS; i++) {
     if(i == 50){
@@ -345,6 +353,10 @@ int main(int argc, char **argv) {
     checkCudaErrors(cudaDeviceSynchronize());
     sdkStopTimer(&timer_process_distances);
 
+    sdkStartTimer(&timer_matrix_conversion);
+    square_matrix_from_triangle<<<N, THREADS>>>(d_processed_distances_matrix, d_processed_distances, 1, N);
+    checkCudaErrors(cudaDeviceSynchronize());
+    sdkStopTimer(&timer_matrix_conversion);
 
     sdkStartTimer(&timer_sum_arr);
     // TODO add this to second stream and run in parallel EDIT: naah
@@ -355,7 +367,7 @@ int main(int argc, char **argv) {
 
 
     sdkStartTimer(&timer_calculate_gradient);
-    calculate_gradient<<<N, THREADS>>>(p_sym_device, d_processed_distances, d_solution, denominator, d_grad, N);
+    calculate_gradient<<<N, THREADS>>>(p_sym_matrix_device , d_processed_distances_matrix, d_solution, denominator, d_grad, N);
     checkCudaErrors(cudaDeviceSynchronize());
     sdkStopTimer(&timer_calculate_gradient);
 
@@ -383,11 +395,12 @@ int main(int argc, char **argv) {
   }
   sdkStopTimer(&timer);
   std::cout << "Total gradient descent time: " << sdkGetTimerValue(&timer) << std::endl;
-  std::cout << "avg. distances time: " << sdkGetTimerValue(&timer_distances) / ITERATIONS << std::endl;
-  std::cout << "avg. process_distances time: " << sdkGetTimerValue(&timer_process_distances) / ITERATIONS  << std::endl;
-  std::cout << "avg.sum_arr time: " << sdkGetTimerValue(&timer_sum_arr) / ITERATIONS << std::endl;
-  std::cout << "avg. calculate_gradient time: " << sdkGetTimerValue(&timer_calculate_gradient) / ITERATIONS << std::endl;
-  std::cout << "avg. make_step time: " << sdkGetTimerValue(&timer_make_step) / ITERATIONS << std::endl;
+  std::cout << "avg. distances time: " << sdkGetTimerValue(&timer_distances) / ITERATIONS << std::endl; // 1.11 ms
+  std::cout << "avg. process_distances time: " << sdkGetTimerValue(&timer_process_distances) / ITERATIONS  << std::endl; // 2.09 ms
+  std::cout << "avg.sum_arr time: " << sdkGetTimerValue(&timer_sum_arr) / ITERATIONS << std::endl; // 0.029ms
+  std::cout << "avg. calculate_gradient time: " << sdkGetTimerValue(&timer_calculate_gradient) / ITERATIONS << std::endl; // 11.7 ms
+  std::cout << "avg. make_step time: " << sdkGetTimerValue(&timer_make_step) / ITERATIONS << std::endl; // 0.04ms
+  std::cout << "avg. matrix_conversion time: " << sdkGetTimerValue(&timer_matrix_conversion) / ITERATIONS << std::endl; // 4ms
 
   // print gradient
   double* grad = (double *)malloc(N * DIMENSIONS_LOWER * sizeof(double));

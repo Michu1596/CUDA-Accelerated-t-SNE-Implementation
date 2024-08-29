@@ -340,18 +340,18 @@ __global__ void calculate_gradient(double *p, double *processed_distances, doubl
   }
 
   int j = threadIdx.x;
-  
+  // we now treat p and processed_distances as a row major matrix
   while(j < n){
     if(i != j){
-      int triangle_index = TRIANGLE(i, j);
-      double q = processed_distances[triangle_index] / denominator;
+      int index = i * n + j;
+      double q = processed_distances[index] / denominator;
 
       for(int k = 0; k < DIMENSIONS_LOWER; k++){
         shared_grad[threadIdx.x * DIMENSIONS_LOWER + k] += 
                 4 
-                * (p[triangle_index] - q) 
+                * (p[index] - q) 
                 * (y[i * DIMENSIONS_LOWER + k] - y[j * DIMENSIONS_LOWER + k])
-                * processed_distances[triangle_index];
+                * processed_distances[index];
       }
     }
     j += stride;
@@ -470,6 +470,35 @@ __global__ void make_step_and_update_learning_rate(double *y, double *old_y, dou
   // }
 }
 
-__global__ void square_matrix_from_triangle(double *matrix, double *triangle, int n){
+// matrix will be row major
+__global__ void square_matrix_from_triangle(double *matrix, double *triangle, int dim, int n){
+  // int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  int stride = blockDim.x;
+  // calculate distance to each data point with lower index
+
+  int triangle_index = 0;
+
+  // column myPoint
+  int i = blockIdx.x;
+  int j = i - 1 - threadIdx.x; // this version with divergent memory access is 3 x faster (wow)
+  while(j >= 0 && i < n){
+    triangle_index = TRIANGLE(i, j);
+    for(int k = 0; k < dim; k++){
+      matrix[(i * n + j) * dim + k] = triangle[triangle_index * dim + k];
+    }
+    j -= stride;
+  }
+
+  // column N - myPoint
+  i = n - i - 1;
+  j = i - 1 - threadIdx.x;
+  // yes this is the same code as above but I don't want to make a function for this
+  while(j >= 0 && i < n){
+    triangle_index = TRIANGLE(i, j);
+    for(int k = 0; k < dim; k++){
+      matrix[(i * n + j) * dim + k] = triangle[triangle_index * dim + k];
+    }
+    j -= stride;
+  }
 
 }
