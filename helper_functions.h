@@ -12,3 +12,4 @@ __global__ void calculate_gradient(double *p, double *processed_distances, doubl
 __global__ void calculate_Kullback_Leibler(double *p, double *processed_distances, double denominator, double* partial_ans, int n);
 __global__ void make_step_and_update_learning_rate(double *y, double *old_y, double *grad, double *learning_rates, double alpha,
                                                     double theta,double *d_delta_bar, double kappa, double fi, int dim_lower, int n);
+__global__ void square_matrix_from_triangle(double *matrix, double *triangle, int n);

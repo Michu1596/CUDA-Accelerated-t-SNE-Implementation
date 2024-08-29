@@ -78,21 +78,27 @@ __global__ void calculate_distances_tiled(double *d_data,double* distances, int 
   int stride = blockDim.x * blockDim.y;
   int in_block_linear_index = tx + ty * blockDim.x;
 
+  int global_x = bx * blockDim.x + tx;
+  int global_y = by * blockDim.y + ty;
+
   // not all blocks are needed
   if(bx > by){
     return; 
   }
 
   // colaborative loading
+  for(int i = in_block_linear_index; i < dim * TILE_WIDTH; i += stride){
+    //  chunk x
+    int index_x =(bx * blockDim.x * dim) + i; // index in global memory
+    if(index_x < n * dim)
+      chunk_x[i] = d_data[index_x];
 
-  // first chunk x
-  for(int i = in_block_linear_index; i < dim * TILE_WIDTH; i += stride){
-    chunk_x[i] = d_data[(bx * blockDim.x * dim) + i];
+    // chunk y
+    int index_y = (by * blockDim.y * dim) + i; // index in global memory
+    if(index_y < n * dim)
+      chunk_y[i] = d_data[index_y];
   }
-  // second chunk y
-  for(int i = in_block_linear_index; i < dim * TILE_WIDTH; i += stride){
-    chunk_y[i] = d_data[(by * blockDim.y * dim) + i];
-  }
+
 
   __syncthreads();
 
@@ -101,12 +107,14 @@ __global__ void calculate_distances_tiled(double *d_data,double* distances, int 
     return;
   }
 
-  // calculate distance
-  double distance = l2_dist_sq(chunk_x + tx * dim, chunk_y + ty * dim, dim);
-  int triangle_index = TRIANGLE(bx * blockDim.x + tx, by * blockDim.y + ty);
+  if(global_x < n && global_y < n){
+    // calculate distance
+    double distance = l2_dist_sq(chunk_x + tx * dim, chunk_y + ty * dim, dim);
+    int triangle_index = TRIANGLE(bx * blockDim.x + tx, by * blockDim.y + ty);
 
-  // write to global memory
-  distances[triangle_index] = distance;
+    // write to global memory
+    distances[triangle_index] = distance;
+  }
 }
 
 // each block is responsible for a single value of sigma for p_{j|blockId} for all j
@@ -326,6 +334,7 @@ __global__ void calculate_gradient(double *p, double *processed_distances, doubl
 
   __shared__ double shared_grad[THREADS * DIMENSIONS_LOWER];
 
+  // each thread zeroes its part of the shared memory so there is no need for syncthreads
   for(int i = 0; i < DIMENSIONS_LOWER; i++){
     shared_grad[threadIdx.x * DIMENSIONS_LOWER + i] = 0;
   }
@@ -338,8 +347,11 @@ __global__ void calculate_gradient(double *p, double *processed_distances, doubl
       double q = processed_distances[triangle_index] / denominator;
 
       for(int k = 0; k < DIMENSIONS_LOWER; k++){
-        shared_grad[threadIdx.x * DIMENSIONS_LOWER + k] += 4 * (p[triangle_index] - q) 
-                * (y[i * DIMENSIONS_LOWER + k] - y[j * DIMENSIONS_LOWER + k]) *  processed_distances[triangle_index];
+        shared_grad[threadIdx.x * DIMENSIONS_LOWER + k] += 
+                4 
+                * (p[triangle_index] - q) 
+                * (y[i * DIMENSIONS_LOWER + k] - y[j * DIMENSIONS_LOWER + k])
+                * processed_distances[triangle_index];
       }
     }
     j += stride;
@@ -456,4 +468,8 @@ __global__ void make_step_and_update_learning_rate(double *y, double *old_y, dou
   //   printf("d_delta_bar[0] = %f\n", d_delta_bar[0]);
   //   printf("grad[0] = %f\n", grad[0]);
   // }
+}
+
+__global__ void square_matrix_from_triangle(double *matrix, double *triangle, int n){
+
 }

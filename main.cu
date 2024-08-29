@@ -215,6 +215,18 @@ int main(int argc, char **argv) {
   sdkStopTimer(&timer);
   std::cout << "distances time: " << sdkGetTimerValue(&timer) << std::endl;
 
+  // calculate distances
+  sdkCreateTimer(&timer);
+  sdkStartTimer(&timer);
+  dim3 block_size(TILE_WIDTH, TILE_WIDTH);
+  dim3 blocks((N + block_size.x - 1) / block_size.x, (N + block_size.y - 1) / block_size.y);
+  calculate_distances_tiled<<<blocks, block_size,
+               DIMENSIONS * TILE_WIDTH * 2 * sizeof(double)>>>
+               (d_data, distances_device2, DIMENSIONS, N);
+
+  checkCudaErrors(cudaDeviceSynchronize());
+  sdkStopTimer(&timer);
+  std::cout << "distances tiled time: " << sdkGetTimerValue(&timer) << std::endl;
 
   // debug Distance
   double *distances_host = (double *)malloc(N * (N + 1) / 2 * sizeof(double));
@@ -226,12 +238,10 @@ int main(int argc, char **argv) {
                              cudaMemcpyDeviceToHost));
   for(int i = 0; i < N; i++) {
     for(int j = 0; j < i; j++) {
-      if(distances_host2[TRIANGLE(i, j)] - distances_host[TRIANGLE(i, j)] > 0.0001 
+      if(distances_host2[TRIANGLE(i, j)] - distances_host[TRIANGLE(i, j)] > 0.0001 // if there is NaN it will not trigger this
         || distances_host2[TRIANGLE(i, j)] - distances_host[TRIANGLE(i, j)] < -0.0001) {
         std::cout << "distances[" << i << "][" << j << "] = " << distances_host[TRIANGLE(i, j)] << " distances2[" << i << "][" << j << "] = " << distances_host2[TRIANGLE(i, j)] << std::endl;
       }
-      // else
-        // std::cout << "distances[" << i << "][" << j << "] = " << distances_host[TRIANGLE(i, j)] << " distances2[" << i << "][" << j << "] = " << distances_host2[TRIANGLE(i, j)] << " OK" << std::endl;
     }
   }
 
