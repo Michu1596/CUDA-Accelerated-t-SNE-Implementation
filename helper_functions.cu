@@ -25,8 +25,8 @@
 // 4 10 11 12 13 14
 // 5 15 16 17 18 19 20
 
-__device__ double l2_dist_sq(double *a, double *b, int n) {
-  double sum = 0;
+__device__ float l2_dist_sq(float *a, float *b, int n) {
+  float sum = 0;
   int index;
   for (int i = 0; i < n; i++) {
     index = i;
@@ -38,7 +38,7 @@ __device__ double l2_dist_sq(double *a, double *b, int n) {
 
 
 // each block is responsible a row x and N - x so each block calculates N + 1 distances
-__global__ void calculate_distances(double *d_data,double* distances, int dim, int n) {
+__global__ void calculate_distances(float *d_data,float* distances, int dim, int n) {
   // int idx = blockIdx.x * blockDim.x + threadIdx.x;
   int stride = blockDim.x;
   // calculate distance to each data point with lower index
@@ -65,10 +65,10 @@ __global__ void calculate_distances(double *d_data,double* distances, int dim, i
 
 }
 
-__global__ void calculate_distances_tiled(double *d_data,double* distances, int dim, int n){
-  extern __shared__ double s[];
-  double *chunk_x = s;
-  double *chunk_y = s + dim * TILE_WIDTH;
+__global__ void calculate_distances_tiled(float *d_data,float* distances, int dim, int n){
+  extern __shared__ float s[];
+  float *chunk_x = s;
+  float *chunk_y = s + dim * TILE_WIDTH;
 
   int bx = blockIdx.x;
   int by = blockIdx.y;
@@ -102,7 +102,7 @@ __global__ void calculate_distances_tiled(double *d_data,double* distances, int 
   }
 
   // calculate distance
-  double distance = l2_dist_sq(chunk_x + tx * dim, chunk_y + ty * dim, dim);
+  float distance = l2_dist_sq(chunk_x + tx * dim, chunk_y + ty * dim, dim);
   int triangle_index = TRIANGLE(bx * blockDim.x + tx, by * blockDim.y + ty);
 
   // write to global memory
@@ -110,13 +110,13 @@ __global__ void calculate_distances_tiled(double *d_data,double* distances, int 
 }
 
 // each block is responsible for a single value of sigma for p_{j|blockId} for all j
-__global__ void calculate_sigmas(double *distances_sq, double *sigmas, double perp, double tolerance, double* dominators, int n) 
+__global__ void calculate_sigmas(float *distances_sq, float *sigmas, float perp, float tolerance, float* dominators, int n) 
 {
   int blockId = blockIdx.x;
   int stride = blockDim.x;
-  __shared__ double sigma;
-  __shared__ double shared_denominator[THREADS];
-  __shared__ double sum_of_numerators_logs[THREADS];
+  __shared__ float sigma;
+  __shared__ float shared_denominator[THREADS];
+  __shared__ float sum_of_numerators_logs[THREADS];
   __shared__ bool done;
 
   //only for the first thread in the block
@@ -124,8 +124,8 @@ __global__ void calculate_sigmas(double *distances_sq, double *sigmas, double pe
     done = false;
     sigma = 1; // initial guess
   }
-  double sigma_upper_bound = sigma;
-  double sigma_lower_bound = sigma;
+  float sigma_upper_bound = sigma;
+  float sigma_lower_bound = sigma;
   bool lower_bound_found = false;
   bool upper_bound_found = false;
 
@@ -133,11 +133,11 @@ __global__ void calculate_sigmas(double *distances_sq, double *sigmas, double pe
   while (!done)
   {  
     __syncthreads();
-    double my_denominator = 0;
-    double my_sum_of_numerators_logs = 0;
+    float my_denominator = 0;
+    float my_sum_of_numerators_logs = 0;
     int i = threadIdx.x;
-    double temp = 0;
-    double temp_exp = 0;
+    float temp = 0;
+    float temp_exp = 0;
     while(i < n){
       if(i != blockId){
         int index = TRIANGLE(blockId, i);
@@ -171,16 +171,16 @@ __global__ void calculate_sigmas(double *distances_sq, double *sigmas, double pe
 
     if(threadIdx.x == 0){
       
-      double shannon_entropy;
+      float shannon_entropy;
       if(shared_denominator[0] != 0){
        shannon_entropy = - (sum_of_numerators_logs[0] / shared_denominator[0]) + log(shared_denominator[0]);
       } else {
         shannon_entropy = 0;
       }
 
-      double perplexity = exp(shannon_entropy * log(2.0));
-      double diff = perplexity - perp;
-      double diff_abs = diff > 0 ? diff : -diff;
+      float perplexity = exp(shannon_entropy * log(2.0));
+      float diff = perplexity - perp;
+      float diff_abs = diff > 0 ? diff : -diff;
 
       if(diff_abs < tolerance ){
         sigmas[blockId] = sigma;
@@ -212,12 +212,12 @@ __global__ void calculate_sigmas(double *distances_sq, double *sigmas, double pe
   }
 }
 
-__global__ void calculate_p_asym(double *distances, double *sigmas, double *denominators, double *p_asym, int n){
+__global__ void calculate_p_asym(float *distances, float *sigmas, float *denominators, float *p_asym, int n){
   int i = blockIdx.x;
   int stride = blockDim.x;
 
-  double denominator = denominators[i];
-  double sigma = sigmas[i];
+  float denominator = denominators[i];
+  float sigma = sigmas[i];
   int j = threadIdx.x;
 
 
@@ -231,7 +231,7 @@ __global__ void calculate_p_asym(double *distances, double *sigmas, double *deno
   
 }
 
-__global__ void calculate_p_sym(double *p_asym, double *p_sym, int n){
+__global__ void calculate_p_sym(float *p_asym, float *p_sym, int n){
   // int idx = blockIdx.x * blockDim.x + threadIdx.x;
   int stride = blockDim.x;
   // calculate distance to each data point with lower index
@@ -243,7 +243,7 @@ __global__ void calculate_p_sym(double *p_asym, double *p_sym, int n){
   int j = i - 1 - threadIdx.x; // this version with divergent memory access is 3 x faster (wow)
   while(j >= 0 && i < n){
     triangle_index = TRIANGLE(i, j);
-    double p = ((p_asym[i * n + j] + p_asym[j * n + i]) / (2 * n));
+    float p = ((p_asym[i * n + j] + p_asym[j * n + i]) / (2 * n));
     p *= P_MULTIPLIER;
     
     p_sym[triangle_index] = p;
@@ -256,7 +256,7 @@ __global__ void calculate_p_sym(double *p_asym, double *p_sym, int n){
   // yes this is the same code as above but I don't want to make a function for this
   while(j >= 0 && i < n){
     triangle_index = TRIANGLE(i, j);
-    double p = ((p_asym[i * n + j] + p_asym[j * n + i]) / (2 * n));
+    float p = ((p_asym[i * n + j] + p_asym[j * n + i]) / (2 * n));
     p *= P_MULTIPLIER;
 
     p_sym[triangle_index] = p;
@@ -265,10 +265,10 @@ __global__ void calculate_p_sym(double *p_asym, double *p_sym, int n){
 }
 
 // about 2 times slower than calculate_distances for dim=2
-__global__ void process_distances(double *distances, double*denominator_for_block, int n){
+__global__ void process_distances(float *distances, float*denominator_for_block, int n){
   int stride = blockDim.x;
   int triangle_index = 0;
-  __shared__ double shared_denominator[THREADS];
+  __shared__ float shared_denominator[THREADS];
   shared_denominator[threadIdx.x] = 0;
 
   // row i
@@ -318,12 +318,12 @@ __global__ void process_distances(double *distances, double*denominator_for_bloc
 
 }
 
-__global__ void calculate_and_process_distances(double *d_data,double* distances, double*denominator_for_block, int dim, int n){
+__global__ void calculate_and_process_distances(float *d_data,float* distances, float*denominator_for_block, int dim, int n){
   // int idx = blockIdx.x * blockDim.x + threadIdx.x;
   int stride = blockDim.x;
   int triangle_index = 0;
 
-  __shared__ double shared_denominator[THREADS];
+  __shared__ float shared_denominator[THREADS];
   shared_denominator[threadIdx.x] = 0;
 
   // Calculate distances and take 1 / (1 + distance) for each distance
@@ -333,7 +333,7 @@ __global__ void calculate_and_process_distances(double *d_data,double* distances
   int otherPoint = myPoint - 1 - threadIdx.x; // this version with divergent memory access is 3 x faster (wow)
   while(otherPoint >= 0 && myPoint < n){
     triangle_index = TRIANGLE(myPoint, otherPoint);
-    double result = 1 /(1 + l2_dist_sq(d_data + myPoint * dim, d_data + otherPoint * dim, dim));
+    float result = 1 /(1 + l2_dist_sq(d_data + myPoint * dim, d_data + otherPoint * dim, dim));
     distances[triangle_index] =  result;
     shared_denominator[threadIdx.x] += result; // for calculating denominator
     otherPoint -= stride;
@@ -343,7 +343,7 @@ __global__ void calculate_and_process_distances(double *d_data,double* distances
   otherPoint = myPoint - 1 - threadIdx.x;
   while(otherPoint >= 0 && myPoint < n){
     triangle_index = TRIANGLE(myPoint, otherPoint);
-    double result = 1 / (1 + l2_dist_sq(d_data + myPoint * dim, d_data + otherPoint * dim, dim));
+    float result = 1 / (1 + l2_dist_sq(d_data + myPoint * dim, d_data + otherPoint * dim, dim));
     distances[triangle_index] = result;
     shared_denominator[threadIdx.x] += result; // for calculating denominator
     otherPoint -= stride;
@@ -371,11 +371,11 @@ __global__ void calculate_and_process_distances(double *d_data,double* distances
 }
 
 
-__global__ void calculate_gradient(double *p, double *processed_distances, double *y, double denominator, double *grad, int n){
+__global__ void calculate_gradient(float *p, float *processed_distances, float *y, float denominator, float *grad, int n){
   int i = blockIdx.x;
   int stride = blockDim.x;
 
-  __shared__ double shared_grad[THREADS * DIMENSIONS_LOWER];
+  __shared__ float shared_grad[THREADS * DIMENSIONS_LOWER];
 
   for(int i = 0; i < DIMENSIONS_LOWER; i++){
     shared_grad[threadIdx.x * DIMENSIONS_LOWER + i] = 0;
@@ -387,7 +387,7 @@ __global__ void calculate_gradient(double *p, double *processed_distances, doubl
   while(j < n){
     if(i != j){
       int triangle_index = TRIANGLE(i, j);
-      double q = processed_distances[triangle_index] / denominator;
+      float q = processed_distances[triangle_index] / denominator;
       // TODO use normal square array
       for(int k = 0; k < DIMENSIONS_LOWER; k++){
         shared_grad[threadIdx.x * DIMENSIONS_LOWER + k] += 4 * (p[triangle_index] - q) 
@@ -421,10 +421,10 @@ __global__ void calculate_gradient(double *p, double *processed_distances, doubl
 
 }
 
-__global__ void calculate_Kullback_Leibler(double *p, double *processed_distances, double denominator, double* partial_ans, int n){
+__global__ void calculate_Kullback_Leibler(float *p, float *processed_distances, float denominator, float* partial_ans, int n){
   int stride = blockDim.x;
   int triangle_index = 0;
-  __shared__ double shared_kullback[THREADS];
+  __shared__ float shared_kullback[THREADS];
   shared_kullback[threadIdx.x] = 0;
 
   // row i
@@ -433,7 +433,7 @@ __global__ void calculate_Kullback_Leibler(double *p, double *processed_distance
   while(j >= 0 && i < n){
     triangle_index = TRIANGLE(i, j);
     
-    double q = processed_distances[triangle_index] / denominator;
+    float q = processed_distances[triangle_index] / denominator;
     if(p[triangle_index] != 0)
       shared_kullback[threadIdx.x] += p[triangle_index] * log(p[triangle_index] / q);
 
@@ -447,7 +447,7 @@ __global__ void calculate_Kullback_Leibler(double *p, double *processed_distance
   while(j >= 0 && i < n){
     triangle_index = TRIANGLE(i, j);
     
-    double q = processed_distances[triangle_index] / denominator;
+    float q = processed_distances[triangle_index] / denominator;
     if(p[triangle_index] != 0)
       shared_kullback[threadIdx.x] += p[triangle_index] * log(p[triangle_index] / q);
     
@@ -475,8 +475,8 @@ __global__ void calculate_Kullback_Leibler(double *p, double *processed_distance
 
 }
 
-__global__ void make_step_and_update_learning_rate(double *y, double *old_y, double *grad, double *learning_rates, double alpha,
-                                                    double theta, double *d_delta_bar,double kappa, double fi, int dim_lower, int n)
+__global__ void make_step_and_update_learning_rate(float *y, float *old_y, float *grad, float *learning_rates, float alpha,
+                                                    float theta, float *d_delta_bar,float kappa, float fi, int dim_lower, int n)
 {
     int j = threadIdx.x + blockIdx.x * blockDim.x;
 
@@ -486,7 +486,7 @@ __global__ void make_step_and_update_learning_rate(double *y, double *old_y, dou
       int index = j * dim_lower + k;
 
       // update y
-      double momentum = alpha * (y[index] - old_y[index]);
+      float momentum = alpha * (y[index] - old_y[index]);
       old_y[index] = y[index]; // update old_y
       y[index] = y[index] - learning_rates[j] * grad[index] + momentum; // TODO add noise
 

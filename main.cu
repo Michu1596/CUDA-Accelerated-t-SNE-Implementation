@@ -1,6 +1,3 @@
-/* 
-żeby intlisense od vsighta działało potrzben sa te pliki co sa w .vscode
-*/
 // CUDA runtime
 #include <cuda_runtime.h>
 
@@ -18,12 +15,12 @@
 #include "helper_functions.h"
 #include "consts.h"
 
-// double data[N * DIMENSIONS];
+// float data[N * DIMENSIONS];
 #define TRIANGLE(X, Y) ( X < Y ? (Y * (Y + 1) / 2 + X) : (X * (X + 1) / 2 + Y) )
 ////////////////////////////////////////////////////////////////////////////////
 // Program main
 ////////////////////////////////////////////////////////////////////////////////
-void init_fake_data(double *data) {
+void init_fake_data(float *data) {
   // cluster 1 of 5 points near (-1000, ..., -1000) with std 1.0
   std::normal_distribution<float> distribution(0.0, 1.0);
   std::default_random_engine generator;
@@ -48,7 +45,7 @@ void init_fake_data(double *data) {
   }
 }
 
-void sample_initial_solution(double *solution, int seed) {
+void sample_initial_solution(float *solution, int seed) {
   std::normal_distribution<float> distribution(0.0, 1.0);
   std::default_random_engine generator;
   // set seed
@@ -60,11 +57,11 @@ void sample_initial_solution(double *solution, int seed) {
   }
 }
 
-double sum_arr_from_device(double* device_arr, int size) {
-  double* host_arr = (double *)malloc(size * sizeof(double));
-  checkCudaErrors(cudaMemcpy(host_arr, device_arr, size * sizeof(double),
+float sum_arr_from_device(float* device_arr, int size) {
+  float* host_arr = (float *)malloc(size * sizeof(float));
+  checkCudaErrors(cudaMemcpy(host_arr, device_arr, size * sizeof(float),
                              cudaMemcpyDeviceToHost));
-  double sum = 0;
+  float sum = 0;
   for(int i = 0; i < size; i++) {
     sum += host_arr[i];
   }
@@ -72,17 +69,17 @@ double sum_arr_from_device(double* device_arr, int size) {
   return sum;
 }
 
-void set_lerning_rates_device(double* d_lerning_rates, double initial_rate, int size) {
-  double* host_lerning_rates = (double *)malloc(size * sizeof(double));
+void set_lerning_rates_device(float* d_lerning_rates, float initial_rate, int size) {
+  float* host_lerning_rates = (float *)malloc(size * sizeof(float));
   for(int i = 0; i < size; i++) {
     host_lerning_rates[i] = initial_rate;
   }
-  checkCudaErrors(cudaMemcpy(d_lerning_rates, host_lerning_rates, size * sizeof(double),
+  checkCudaErrors(cudaMemcpy(d_lerning_rates, host_lerning_rates, size * sizeof(float),
                              cudaMemcpyHostToDevice));
   free(host_lerning_rates);
 }
 
-void read_lines_from_file(const char* filename, double* arr, int size) {
+void read_lines_from_file(const char* filename, float* arr, int size) {
   FILE *f = fopen(filename, "r");
   if(f == NULL) {
     std::cout << "Error opening file" << std::endl;
@@ -91,8 +88,8 @@ void read_lines_from_file(const char* filename, double* arr, int size) {
   char line[256];
   int i = 0;
   while(fgets(line, sizeof(line), f)) {
-    double x;
-    sscanf(line, "%lf", &x);
+    float x;
+    sscanf(line, "%f", &x); // lf for double, f for float
     // printf("%lf\n", x);
     arr[i++] = x;
     if(i == size)
@@ -100,80 +97,79 @@ void read_lines_from_file(const char* filename, double* arr, int size) {
   }
   fclose(f);
 }
-
-void modify_p_sym(double* p_sym_device, int n) {
-  double* p_sym_host = (double *)malloc(n * (n + 1) / 2 * sizeof(double));
+void modify_p_sym(float* p_sym_device, int n) {
+  float* p_sym_host = (float *)malloc(n * (n + 1) / 2 * sizeof(float));
   // copy p_sym to host
-  checkCudaErrors(cudaMemcpy(p_sym_host, p_sym_device, n * (n + 1) / 2 * sizeof(double),
+  checkCudaErrors(cudaMemcpy(p_sym_host, p_sym_device, n * (n + 1) / 2 * sizeof(float),
                          cudaMemcpyDeviceToHost));
-  double before = sum_arr_from_device(p_sym_device, n * (n + 1) / 2);
+  float before = sum_arr_from_device(p_sym_device, n * (n + 1) / 2);
   // modify p_sym 
   for(int i = 0; i < N; i++) {
     for(int j = 0; j < i; j++) {
-      double p = p_sym_host[TRIANGLE(i, j)];
+      float p = p_sym_host[TRIANGLE(i, j)];
       p /= P_MULTIPLIER;
       p_sym_host[TRIANGLE(i, j)] = p;
     }
   }
   // copy back to device
-  checkCudaErrors(cudaMemcpy(p_sym_device, p_sym_host, n * (n + 1) / 2 * sizeof(double),
+  checkCudaErrors(cudaMemcpy(p_sym_device, p_sym_host, n * (n + 1) / 2 * sizeof(float),
                              cudaMemcpyHostToDevice));
-  double after = sum_arr_from_device(p_sym_device, n * (n + 1) / 2);
+  float after = sum_arr_from_device(p_sym_device, n * (n + 1) / 2);
   std::cout << "p_sym sum before: " << before << " after: " << after << std::endl;
   free(p_sym_host);
 }
 
-void calculate_distances_wrapper(double* d_data, double* distances_device, int dimensions, int n) {
+void calculate_distances_wrapper(float* d_data, float* distances_device, int dimensions, int n) {
   if(dimensions < DIMENSION_LIMIT_FOR_USING_TILED_KERNEL)
     calculate_distances<<<(n + 1) / 2, THREADS>>>(d_data, distances_device, dimensions, n);
   else {
     dim3 block_size(TILE_WIDTH, TILE_WIDTH);
     dim3 blocks((n + block_size.x - 1) / block_size.x, (n + block_size.y - 1) / block_size.y);
     calculate_distances_tiled<<<blocks, block_size,
-               dimensions * TILE_WIDTH * 2 * sizeof(double)>>>
+               dimensions * TILE_WIDTH * 2 * sizeof(float)>>>
                (d_data, distances_device, dimensions, n);
   }
 }
 
 int main(int argc, char **argv) {
   
-  double *d_data;
-  double *distances_device;
-  double *distances_device2;
-  double *sigmas_device;
-  double *sigmas_host;
-  double *denominators_device; // for calculating pji - we can calculate it in the same kernel as sigmas
-  double *p_asym_device; // p_i|j
-  double *p_sym_device;  // p_ij
-  double *p_asym_host;
-  double *p_sym_host;
+  float *d_data;
+  float *distances_device;
+  float *distances_device2;
+  float *sigmas_device;
+  float *sigmas_host;
+  float *denominators_device; // for calculating pji - we can calculate it in the same kernel as sigmas
+  float *p_asym_device; // p_i|j
+  float *p_sym_device;  // p_ij
+  float *p_asym_host;
+  float *p_sym_host;
 
-  double* solution;
-  double* data = (double *)malloc(N * DIMENSIONS * sizeof(double));
-  checkCudaErrors(cudaMalloc(&d_data, N * DIMENSIONS * sizeof(double)));
+  float* solution;
+  float* data = (float *)malloc(N * DIMENSIONS * sizeof(float));
+  checkCudaErrors(cudaMalloc(&d_data, N * DIMENSIONS * sizeof(float)));
 
-  checkCudaErrors(cudaMalloc(&distances_device, N * (N + 1) / 2 * sizeof(double)));
-  checkCudaErrors(cudaMemset(distances_device, -1, N * (N + 1) / 2 * sizeof(double)));
+  checkCudaErrors(cudaMalloc(&distances_device, N * (N + 1) / 2 * sizeof(float)));
+  checkCudaErrors(cudaMemset(distances_device, -1, N * (N + 1) / 2 * sizeof(float)));
 
-  checkCudaErrors(cudaMalloc(&distances_device2, N * (N + 1) / 2 * sizeof(double)));
-  checkCudaErrors(cudaMemset(distances_device2, -1, N * (N + 1) / 2 * sizeof(double)));
+  checkCudaErrors(cudaMalloc(&distances_device2, N * (N + 1) / 2 * sizeof(float)));
+  checkCudaErrors(cudaMemset(distances_device2, -1, N * (N + 1) / 2 * sizeof(float)));
 
-  checkCudaErrors(cudaMalloc(&denominators_device, N * sizeof(double)));
-  checkCudaErrors(cudaMemset(denominators_device, -1, N * sizeof(double)));
+  checkCudaErrors(cudaMalloc(&denominators_device, N * sizeof(float)));
+  checkCudaErrors(cudaMemset(denominators_device, -1, N * sizeof(float)));
 
-  checkCudaErrors(cudaMalloc(&sigmas_device, N * sizeof(double)));
-  checkCudaErrors(cudaMemset(sigmas_device, -1, N * sizeof(double)));
+  checkCudaErrors(cudaMalloc(&sigmas_device, N * sizeof(float)));
+  checkCudaErrors(cudaMemset(sigmas_device, -1, N * sizeof(float)));
 
-  checkCudaErrors(cudaMalloc(&p_asym_device, N * N * sizeof(double)));
-  checkCudaErrors(cudaMemset(p_asym_device, 0, N * N * sizeof(double)));
+  checkCudaErrors(cudaMalloc(&p_asym_device, N * N * sizeof(float)));
+  checkCudaErrors(cudaMemset(p_asym_device, 0, N * N * sizeof(float)));
 
-  checkCudaErrors(cudaMalloc(&p_sym_device, N * (N + 1) / 2 * sizeof(double)));
-  checkCudaErrors(cudaMemset(p_sym_device, 0, N * (N + 1) / 2 * sizeof(double)));
+  checkCudaErrors(cudaMalloc(&p_sym_device, N * (N + 1) / 2 * sizeof(float)));
+  checkCudaErrors(cudaMemset(p_sym_device, 0, N * (N + 1) / 2 * sizeof(float)));
 
-  solution = (double *)malloc(N * DIMENSIONS_LOWER * sizeof(double));
-  p_sym_host = (double *)malloc(N * (N + 1) / 2 * sizeof(double));
-  p_asym_host = (double *)malloc(N * N * sizeof(double));
-  sigmas_host = (double *)malloc(N * sizeof(double));
+  solution = (float *)malloc(N * DIMENSIONS_LOWER * sizeof(float));
+  p_sym_host = (float *)malloc(N * (N + 1) / 2 * sizeof(float));
+  p_asym_host = (float *)malloc(N * N * sizeof(float));
+  sigmas_host = (float *)malloc(N * sizeof(float));
   // ^ triangle matrix of distances between points
   // 
   //   0 1 2 3 4
@@ -202,7 +198,7 @@ int main(int argc, char **argv) {
   sdkCreateTimer(&timer);
   sdkStartTimer(&timer);
   read_lines_from_file("/home/micha-nowicki/Dokumenty/tSNE1/transformed6k.csv", data, N * DIMENSIONS);
-  checkCudaErrors(cudaMemcpy(d_data, data, N * DIMENSIONS * sizeof(double),
+  checkCudaErrors(cudaMemcpy(d_data, data, N * DIMENSIONS * sizeof(float),
                              cudaMemcpyHostToDevice));
   sdkStopTimer(&timer);
   std::cout << "Reading data time: " << sdkGetTimerValue(&timer) << std::endl;
@@ -217,12 +213,12 @@ int main(int argc, char **argv) {
 
 
   // debug Distance
-  double *distances_host = (double *)malloc(N * (N + 1) / 2 * sizeof(double));
-  checkCudaErrors(cudaMemcpy(distances_host, distances_device, N * (N + 1) / 2 * sizeof(double),
+  float *distances_host = (float *)malloc(N * (N + 1) / 2 * sizeof(float));
+  checkCudaErrors(cudaMemcpy(distances_host, distances_device, N * (N + 1) / 2 * sizeof(float),
                              cudaMemcpyDeviceToHost));
 
-  double *distances_host2 = (double *)malloc(N * (N + 1) / 2 * sizeof(double));
-  checkCudaErrors(cudaMemcpy(distances_host2, distances_device2, N * (N + 1) / 2 * sizeof(double),
+  float *distances_host2 = (float *)malloc(N * (N + 1) / 2 * sizeof(float));
+  checkCudaErrors(cudaMemcpy(distances_host2, distances_device2, N * (N + 1) / 2 * sizeof(float),
                              cudaMemcpyDeviceToHost));
   for(int i = 0; i < N; i++) {
     for(int j = 0; j < i; j++) {
@@ -236,8 +232,8 @@ int main(int argc, char **argv) {
   }
 
   // calculating sigmas
-  double perplexity = 40.0;
-  double tolerance = 0.1;
+  float perplexity = 40.0;
+  float tolerance = 0.1;
   sdkCreateTimer(&timer);
   sdkStartTimer(&timer);
   calculate_sigmas<<<N, THREADS>>>(distances_device, sigmas_device, perplexity, tolerance, denominators_device, N);
@@ -268,27 +264,27 @@ int main(int argc, char **argv) {
   std::cout << "p_sym summed: " << sum_arr_from_device(p_sym_device, N * (N + 1) / 2) << std::endl;
 
   // grtadient descent
-  double* d_processed_distances;   // divided by q denoinator gives q (low dim affinites)
-  double* d_solution;              // low dim solution
-  double* d_solution_old;          // this will become handy for momentum
-  double* d_denominator_for_block; // for calculating q
-  double* d_grad;                  // gradient
-  double* d_lerning_rates;         // learning rates for each parameter
-  double* d_delta_bar;             // exponential average of partial derivatives
-  double* d_kullback_leibler;      // for calculating kullback leibler divergence - just for curiosity
-  checkCudaErrors(cudaMalloc(&d_processed_distances, N * (N + 1) / 2 * sizeof(double)));
-  checkCudaErrors(cudaMalloc(&d_solution, N * DIMENSIONS_LOWER * sizeof(double)));
-  checkCudaErrors(cudaMalloc(&d_solution_old, N * DIMENSIONS_LOWER * sizeof(double)));
-  checkCudaErrors(cudaMalloc(&d_denominator_for_block, ((N + 1) / 2) * sizeof(double)));
-  checkCudaErrors(cudaMalloc(&d_grad, N * DIMENSIONS_LOWER * sizeof(double)));
-  checkCudaErrors(cudaMalloc(&d_lerning_rates, N * DIMENSIONS_LOWER * sizeof(double)));
-  checkCudaErrors(cudaMalloc(&d_delta_bar, N * DIMENSIONS_LOWER * sizeof(double)));
-  checkCudaErrors(cudaMalloc(&d_kullback_leibler, (N + 1) / 2 * sizeof(double)));
+  float* d_processed_distances;   // divided by q denoinator gives q (low dim affinites)
+  float* d_solution;              // low dim solution
+  float* d_solution_old;          // this will become handy for momentum
+  float* d_denominator_for_block; // for calculating q
+  float* d_grad;                  // gradient
+  float* d_lerning_rates;         // learning rates for each parameter
+  float* d_delta_bar;             // exponential average of partial derivatives
+  float* d_kullback_leibler;      // for calculating kullback leibler divergence - just for curiosity
+  checkCudaErrors(cudaMalloc(&d_processed_distances, N * (N + 1) / 2 * sizeof(float)));
+  checkCudaErrors(cudaMalloc(&d_solution, N * DIMENSIONS_LOWER * sizeof(float)));
+  checkCudaErrors(cudaMalloc(&d_solution_old, N * DIMENSIONS_LOWER * sizeof(float)));
+  checkCudaErrors(cudaMalloc(&d_denominator_for_block, ((N + 1) / 2) * sizeof(float)));
+  checkCudaErrors(cudaMalloc(&d_grad, N * DIMENSIONS_LOWER * sizeof(float)));
+  checkCudaErrors(cudaMalloc(&d_lerning_rates, N * DIMENSIONS_LOWER * sizeof(float)));
+  checkCudaErrors(cudaMalloc(&d_delta_bar, N * DIMENSIONS_LOWER * sizeof(float)));
+  checkCudaErrors(cudaMalloc(&d_kullback_leibler, (N + 1) / 2 * sizeof(float)));
 
-  checkCudaErrors(cudaMemset(d_processed_distances, 0, N * (N + 1) / 2 * sizeof(double)));
-  checkCudaErrors(cudaMemset(d_solution, 3, N * DIMENSIONS_LOWER * sizeof(double)));
+  checkCudaErrors(cudaMemset(d_processed_distances, 0, N * (N + 1) / 2 * sizeof(float)));
+  checkCudaErrors(cudaMemset(d_solution, 3, N * DIMENSIONS_LOWER * sizeof(float)));
 
-  checkCudaErrors(cudaMemcpy(d_solution, solution, N * DIMENSIONS_LOWER * sizeof(double),
+  checkCudaErrors(cudaMemcpy(d_solution, solution, N * DIMENSIONS_LOWER * sizeof(float),
                              cudaMemcpyHostToDevice));
 
   set_lerning_rates_device(d_lerning_rates, 1000.0, N * DIMENSIONS_LOWER);
@@ -296,13 +292,13 @@ int main(int argc, char **argv) {
   // for(int i = 0; i < N ; i++) {
   //   for(int j = 0; j < DIMENSIONS_LOWER; j++) {
   //     std::cout << "solution[" << i << "][" << j << "] = " << solution[i * DIMENSIONS_LOWER + j] << std::endl;
-  //   }__global__ void calculate_Kullback_Leibler(double *p, double *processed_distances, double denominator, double* partial_ans, int n);
-  double alpha = 0.5; // momentum
+  //   }__global__ void calculate_Kullback_Leibler(float *p, float *processed_distances, float denominator, float* partial_ans, int n);
+  float alpha = 0.5; // momentum
 
   // for delta bar delta
-  double kappa = 3.75;
-  double fi = 0.1;
-  double theta = 0.7;
+  float kappa = 3.75;
+  float fi = 0.1;
+  float theta = 0.7;
 
   // reset timer
   sdkCreateTimer(&timer);
@@ -339,7 +335,7 @@ int main(int argc, char **argv) {
 
     sdkStartTimer(&timer_sum_arr);
     // TODO add this to second stream and run in parallel EDIT: naah
-    double denominator = 2 * sum_arr_from_device(d_denominator_for_block, (N + 1) / 2); // its important to
+    float denominator = 2 * sum_arr_from_device(d_denominator_for_block, (N + 1) / 2); // its important to
     // multiply by 2 because we are operating on half of the matrix, we want our array to sum up to 0.5 so whole matrix sums up to 1
     // just like in p_ij
     sdkStopTimer(&timer_sum_arr);
@@ -353,7 +349,7 @@ int main(int argc, char **argv) {
     // just for curiosity - calculate kulback leibler divergence
     // calculate_Kullback_Leibler<<<(N + 1) / 2, THREADS>>>(p_sym_device, d_processed_distances, denominator,d_kullback_leibler,  N);
     // checkCudaErrors(cudaDeviceSynchronize());
-    // double kullback_leibler = 2 * sum_arr_from_device(d_kullback_leibler, (N + 1) / 2); // cuz its half of the matrix
+    // float kullback_leibler = 2 * sum_arr_from_device(d_kullback_leibler, (N + 1) / 2); // cuz its half of the matrix
     // std::cout << "Kullback Leibler divergence: " << kullback_leibler << std::endl;
     // std::cout << "q summed: " << sum_arr_from_device(d_processed_distances, N * (N + 1) / 2) / denominator << std::endl;
     // std::cout << "denominator: " << denominator << std::endl;
@@ -382,8 +378,8 @@ int main(int argc, char **argv) {
 
 
   // print gradient
-  double* grad = (double *)malloc(N * DIMENSIONS_LOWER * sizeof(double));
-  checkCudaErrors(cudaMemcpy(grad, d_grad, N * DIMENSIONS_LOWER * sizeof(double),
+  float* grad = (float *)malloc(N * DIMENSIONS_LOWER * sizeof(float));
+  checkCudaErrors(cudaMemcpy(grad, d_grad, N * DIMENSIONS_LOWER * sizeof(float),
                              cudaMemcpyDeviceToHost));
 
   // for(int i = 0; i < N ; i++) {
@@ -392,7 +388,7 @@ int main(int argc, char **argv) {
   //   }
   // }
 
-  checkCudaErrors(cudaMemcpy(solution, d_solution, N * DIMENSIONS_LOWER * sizeof(double),
+  checkCudaErrors(cudaMemcpy(solution, d_solution, N * DIMENSIONS_LOWER * sizeof(float),
                              cudaMemcpyDeviceToHost));
   // open file to save solution
   FILE *f = fopen("solution.txt", "w");
