@@ -15,7 +15,6 @@
 #include "helper_functions.h"
 #include "consts.h"
 
-// float data[N * DIMENSIONS];
 #define TRIANGLE(X, Y) ( X < Y ? (Y * (Y + 1) / 2 + X) : (X * (X + 1) / 2 + Y) )
 ////////////////////////////////////////////////////////////////////////////////
 // Program main
@@ -26,7 +25,6 @@ void sample_initial_solution(float *solution, int seed) {
   std::default_random_engine generator;
   // set seed
   generator.seed(seed);
-
 
   for(int i = 0; i < N * DIMENSIONS_LOWER; i++) {
     solution[i] = distribution(generator) / 10000;
@@ -66,7 +64,6 @@ void read_lines_from_file(const char* filename, float* arr, int size) {
   while(fgets(line, sizeof(line), f)) {
     float x;
     sscanf(line, "%f", &x); // lf for double, f for float
-    // printf("%lf\n", x);
     arr[i++] = x;
     if(i == size)
       break;
@@ -92,7 +89,6 @@ void modify_p_sym(float* p_sym_device, int n) {
   checkCudaErrors(cudaMemcpy(p_sym_device, p_sym_host, n * (n + 1) / 2 * sizeof(float),
                              cudaMemcpyHostToDevice));
   float after = sum_arr_from_device(p_sym_device, n * (n + 1) / 2);
-  std::cout << "p_sym sum before: " << before << " after: " << after << std::endl;
   free(p_sym_host);
 }
 
@@ -157,7 +153,15 @@ int main(int argc, char **argv) {
   // 4 10 11 12 13 14
   // ^ rows
 
-  // init data and copy to device
+  char data_filename[256];
+  if(argc > 1) {
+    strcpy(data_filename, argv[1]);
+  }
+  else {
+    printf("Usage: %s data_filename [seed] [perplexity] [tolerance] [result_filename]\n", argv[0]);
+    exit(1);
+  }
+
   int seed = 0;
   if(argc > 2) {
     seed = atoi(argv[2]);
@@ -188,10 +192,11 @@ int main(int argc, char **argv) {
   printf("Perplexity: %f\n", perplexity);
   printf("Tolerance: %f\n", tolerance);
 
+  // init data and copy to device
   sample_initial_solution(solution, seed);  
                             
   // read data from file and copy to device
-  read_lines_from_file("/home/micha-nowicki/Dokumenty/tSNE1/transformed6k.csv", data, N * DIMENSIONS);
+  read_lines_from_file(data_filename, data, N * DIMENSIONS); // change path to your file
   checkCudaErrors(cudaMemcpy(d_data, data, N * DIMENSIONS * sizeof(float),
                              cudaMemcpyHostToDevice));
 
@@ -237,7 +242,7 @@ int main(int argc, char **argv) {
                              cudaMemcpyHostToDevice));
 
   set_lerning_rates_device(d_lerning_rates, 1000.0, N * DIMENSIONS_LOWER);
-  float alpha = 0.9; // momentum
+  float alpha = 0.5; // momentum
 
   // for delta bar delta optimization technique
   float kappa = 3.75;
@@ -249,12 +254,8 @@ int main(int argc, char **argv) {
     if(i == 50){
       modify_p_sym(p_sym_device, N);
     }
-    // calculate_distances_wrapper(d_solution, d_processed_distances, DIMENSIONS_LOWER, N);
     calculate_and_process_distances<<<(N + 1) / 2, THREADS>>>(d_solution, d_processed_distances,d_denominator_for_block, DIMENSIONS_LOWER, N);
     checkCudaErrors(cudaDeviceSynchronize());    
-    // process_distances<<<(N + 1) / 2, THREADS>>>(d_processed_distances, d_denominator_for_block, N);
-    // checkCudaErrors(cudaDeviceSynchronize());
-
     float denominator = 2 * sum_arr_from_device(d_denominator_for_block, (N + 1) / 2); // its important to
     // multiply by 2 because we are operating on half of the matrix, we want our array to sum up to 0.5 so whole matrix sums up to 1
     // just like in p_ij
@@ -263,9 +264,9 @@ int main(int argc, char **argv) {
     checkCudaErrors(cudaDeviceSynchronize());
 
     if(i > 250)
-      alpha = 0.8;
-    // update solution
+      alpha = 0.8;  // change momentum after 250 iterations
 
+    // update solution
     make_step_and_update_learning_rate<<<(N + 255) / 256, 256>>>(d_solution, d_solution_old, d_grad, d_lerning_rates, alpha,
                                                     theta, d_delta_bar, kappa, fi, DIMENSIONS_LOWER, N);
     checkCudaErrors(cudaDeviceSynchronize());

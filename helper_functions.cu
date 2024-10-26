@@ -502,10 +502,4 @@ __global__ void make_step_and_update_learning_rate(float *y, float *old_y, float
       d_delta_bar[index] = (1 - theta) * grad[index] + theta * d_delta_bar[index];
     }
   }
-  // if(j == 309){
-  //   printf("y[0] = %f\n", y[0]);
-  //   printf("learning_rates[0] = %f\n", learning_rates[0]);
-  //   printf("d_delta_bar[0] = %f\n", d_delta_bar[0]);
-  //   printf("grad[0] = %f\n", grad[0]);
-  // }
 }
